@@ -1,4 +1,5 @@
-flask
+pyTelegramBotAPI
 requests
+flask
 flask-cors
 gunicorn

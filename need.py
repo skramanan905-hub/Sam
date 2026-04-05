@@ -17,21 +17,23 @@ bot = telebot.TeleBot(API_TOKEN)
 VERIFY_URL = "https://api.live3d.io/api/v1/verify_token"
 TAGGER_URL = "https://api.live3d.io/api/v1/generation/img2prompt"
 
-# Task Queue System
+# Task Queue & Storage
 task_queue = queue.Queue()
 SESSION_FILE = "live3d_sessions.json"
 
-# --- RENDER KEEP-ALIVE SERVER ---
-server = Flask('')
-@server.route('/')
-def home(): return "Bot is Alive!"
+# --- FLASK HEALTH CHECK (Same as goo.py logic) ---
+app = Flask(__name__)
 
-def run_web():
-    # Render uses the PORT environment variable
+@app.route('/')
+def index():
+    return "AnimeGenius Bot is Active"
+
+def run_flask():
+    # Render requires a web server to stay alive
     port = int(os.environ.get("PORT", 8080))
-    server.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port)
 
-# --- SESSION HELPERS ---
+# --- TOKEN HELPERS ---
 def load_token(uid):
     if os.path.exists(SESSION_FILE):
         try:
@@ -44,12 +46,13 @@ def save_token(uid, token):
     data = {}
     if os.path.exists(SESSION_FILE):
         with open(SESSION_FILE, "r") as f:
-            data = json.load(f)
+            try: data = json.load(f)
+            except: data = {}
     data[str(uid)] = token
     with open(SESSION_FILE, "w") as f:
         json.dump(data, f, indent=4)
 
-# --- THE BACKGROUND WORKER (Processes 50+ images one-by-one) ---
+# --- BACKGROUND WORKER (Processes images one-by-one) ---
 def worker():
     while True:
         task = task_queue.get()
@@ -61,6 +64,7 @@ def worker():
             file_info = bot.get_file(file_id)
             img_content = bot.download_file(file_info.file_path)
             
+            # Convert to Base64
             encoded = base64.b64encode(img_content).decode('utf-8')
             base64_payload = f"data:image/webp;base64,{encoded}"
 
@@ -74,73 +78,82 @@ def worker():
             res = requests.post(TAGGER_URL, headers=headers, json={"image": base64_payload, "consume_points": 1})
             
             if res.status_code == 200:
-                tag_data = res.json()
-                prompt = tag_data.get('data', 'No tags returned.')
-                
-                # Update coins
-                b_res = requests.post(VERIFY_URL, headers=headers, json={})
-                points = b_res.json().get('points', '??')
+                try:
+                    tag_data = res.json()
+                    prompt = tag_data.get('data', 'No tags returned.')
+                    
+                    # Fetch Points Update
+                    b_res = requests.post(VERIFY_URL, headers=headers, json={})
+                    points = b_res.json().get('points', '??')
 
-                bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=status_msg_id,
-                    text=f"📝 **Prompt:**\n`{prompt}`\n\n💰 **Remaining:** `{points}` Points",
-                    parse_mode="Markdown"
-                )
+                    bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=status_msg_id,
+                        text=f"📝 **Prompt:**\n`{prompt}`\n\n💰 **Remaining:** `{points}` Points",
+                        parse_mode="Markdown"
+                    )
+                except:
+                    bot.edit_message_text("❌ Error reading API response.", chat_id, status_msg_id)
             elif res.status_code == 429:
-                bot.edit_message_text(f"⚠️ Server busy. Retrying in 10s...", chat_id, status_msg_id)
+                # Server is overloaded, put back in queue and wait
                 time.sleep(10)
                 task_queue.put(task)
             else:
                 bot.edit_message_text(f"❌ API Error: {res.status_code}", chat_id, status_msg_id)
 
         except Exception as e:
-            try: bot.edit_message_text(f"🧨 Error: {str(e)}", chat_id, status_msg_id)
-            except: pass
+            print(f"Worker Error: {e}")
         
-        time.sleep(2.5) # Anti-ban safety pacing
+        time.sleep(2.5) # Crucial pacing to prevent ban
         task_queue.task_done()
 
-# Start background thread
-threading.Thread(target=worker, daemon=True).start()
-
-# --- BOT COMMANDS ---
+# --- BOT HANDLERS ---
 @bot.message_handler(commands=['start'])
 def start(m):
-    bot.reply_to(m, "🤖 **AnimeGenius Queue Bot**\n\nUse `/login YOUR_TOKEN` first.\nThen send images.")
+    bot.reply_to(m, "🤖 **AnimeGenius Img2Prompt Bot**\n\n1. Use `/login YOUR_TOKEN` to start.\n2. Send images (even 50+ at once). They will process one-by-one.")
 
 @bot.message_handler(commands=['login'])
 def login(m):
     args = m.text.split()
-    if len(args) < 2: return bot.reply_to(m, "❌ Use: `/login token`")
+    if len(args) < 2:
+        return bot.reply_to(m, "❌ Use: `/login [token]`")
+    
     token = args[1].replace("Bearer ", "").strip()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    
     try:
         res = requests.post(VERIFY_URL, headers=headers, json={})
         if res.status_code == 200:
             save_token(m.chat.id, token)
-            bot.reply_to(m, "✅ **Logged in!**")
-        else: bot.reply_to(m, "❌ Invalid token.")
-    except: bot.reply_to(m, "🧨 Connection error.")
+            bot.reply_to(m, f"✅ **Login Success!**\n💰 Points: `{res.json().get('points')}`")
+        else:
+            bot.reply_to(m, "❌ Invalid Token.")
+    except:
+        bot.reply_to(m, "🧨 Connection failed.")
 
 @bot.message_handler(content_types=['photo'])
-def queue_images(m):
+def handle_photos(m):
     uid = m.chat.id
     token = load_token(uid)
-    if not token: return bot.reply_to(m, "❌ Use `/login` first.")
+    if not token:
+        return bot.reply_to(m, "❌ Please `/login` first.")
 
-    q_size = task_queue.qsize() + 1
-    status = bot.reply_to(m, f"📥 **In Queue (Pos: {q_size})**")
+    q_pos = task_queue.qsize() + 1
+    status = bot.reply_to(m, f"📥 **Queued at Position: {q_pos}**")
+    
+    # Add to the one-by-one line
     task_queue.put((uid, m.photo[-1].file_id, status.message_id, token))
 
 if __name__ == "__main__":
-    # --- RENDER RESTART FIX ---
-    print("🚀 Fixing Telegram Conflict (409)...")
-    bot.remove_webhook(drop_pending_updates=True)
-    time.sleep(1) 
+    # --- RENDER FIX: CLEAR OLD SESSIONS ---
+    print("🚀 Removing old webhooks...")
+    bot.delete_webhook(drop_pending_updates=True) # Fixed function name
     
-    # Start Keep-Alive Server
-    Thread(target=run_web).start()
+    # Start background worker thread
+    threading.Thread(target=worker, daemon=True).start()
     
-    print("✅ Bot is starting...")
-    bot.infinity_polling(timeout=60, long_polling_timeout=5)
+    # Start Flask for Render Health Check
+    Thread(target=run_flask).start()
+    
+    print("✅ Bot is Polling...")
+    bot.infinity_polling()

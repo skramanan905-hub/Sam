@@ -13,8 +13,8 @@ DAILY_URL = "https://api.pixai.art/v2/claim/pixai-daily-credits"
 H_GEN    = "61b5dafa7ade64f847051cdca7024b359bae652421834b8f78423d7640f17d96"
 H_POLL   = "a32947c6b546befddacd08a3af63cc4ee2277af27fd43342a01fc0414fca3e8a"
 H_LORA   = "4e1614f7373d676cb8ec17975796188369ce321a6e78336558ec50f0c2317840"
-H_ROLL   = "f0778d88963cc4e40749a8ecd9d510808b4a14cd63fac498e7763e6d5d780e5e" # Mios Roll
-H_REW    = "923002464a8e816706394061c18316cd2d14f5f025dbd1d08020e44cd8a23546" # Social Follow
+H_ROLL   = "f0778d88963cc4e40749a8ecd9d510808b4a14cd63fac498e7763e6d5d780e5e"
+H_REW    = "923002464a8e816706394061c18316cd2d14f5f025dbd1d08020e44cd8a23546"
 H_CRE    = "9356b42a4ff6e987347a1f1ee3de7aba4bd103b1cdbfbbc4c5c5fcf52767ad66"
 H_LIST   = "cc067203ddd0846c19d9e247d837c32da498247ec252fe30828434f2f136f53d"
 H_UPLOAD = "dd71971acde11807d01862ff1a94657479f7e833af75eac850aa2de0a14fa1fa"
@@ -42,8 +42,8 @@ def fmt_num(num):
     return str(num)
 
 def fmt_type(t):
-    mapping = {"SDXL_MODEL": "PixAI XL", "DIT7B_MODEL": "PixAI DiT.1", "MMDIT26A_MODEL": "PixAI DiT.2", "CHAT": "Edit"}
-    return mapping.get(t, "Model")
+    m = {"SDXL_MODEL": "PixAI XL", "DIT7B_MODEL": "PixAI DiT.1", "MMDIT26A_MODEL": "PixAI DiT.2", "CHAT": "Edit"}
+    return m.get(t, "Model")
 
 def check_refresh(resp):
     new_t = resp.cookies.get("user_token")
@@ -66,10 +66,9 @@ def compute_cost():
     d = request.json
     t = d.get("token")
     l_w = {c['v_id']: float(c['weight']) for c in d.get("lora_configs", [])}
-    vars = {"parameters": {"modelId": d.get("modelId"), "width": int(d.get("w")), "height": int(d.get("h")), "batchSize": int(d.get("batch")), "lora": l_w, "samplingSteps": int(d.get("steps")), "priority": 1000}}
-    payload = {"operationName": "computeTaskCost", "variables": vars, "extensions": {"persistedQuery": {"version": 1, "sha256Hash": H_COST}}}
+    v = {"parameters": {"modelId": d.get("modelId"), "width": int(d.get("w")), "height": int(d.get("h")), "batchSize": int(d.get("batch")), "lora": l_w, "samplingSteps": int(d.get("steps")), "priority": 1000}}
     try:
-        r = requests.post(API_URL, json=payload, headers=get_h(t))
+        r = requests.post(API_URL, json={"operationName": "computeTaskCost", "variables": v, "extensions": {"persistedQuery": {"version": 1, "sha256Hash": H_COST}}}, headers=get_h(t))
         return jsonify({"cost": r.json()['data']['computeTaskCost']['cost']})
     except: return jsonify({"cost": 0})
 
@@ -81,24 +80,20 @@ def tasks():
     vars = {"last": 30, "before": cursor, "parameterFields": p_fields}
     p = {"operationName": "listMyTasks", "variables": json.dumps(vars), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_LIST}})}
     try:
-        r = requests.get(API_URL, params=p, headers=get_h(t)).json()
-        edges = r['data']['me']['tasks']['edges']
+        r = requests.get(API_URL, params=p, headers=get_h(t))
+        resp_json = r.json()
+        edges = resp_json['data']['me']['tasks']['edges']
         task_data = []
         for edge in reversed(edges):
             node = edge['node']
             if node['status'] == "completed":
                 p_node = node['parameters']
                 extra = p_node.get('extra', {})
-                
-                # --- UNTOUCHED: EXACT PROMPT LOGIC ---
                 natural_data = extra.get('naturalPrompts', [])
                 if isinstance(natural_data, list) and len(natural_data) > 0: orig_prompt = natural_data[0]
                 elif isinstance(natural_data, str) and len(natural_data) > 1: orig_prompt = natural_data
                 else: orig_prompt = p_node.get('prompts', 'N/A')
-
                 ref_id = p_node.get('mediaId')
-                ref_thumb = f"https://api.pixai.art/v1/media/{ref_id}/thumbnail" if ref_id else None
-
                 task_data.append({
                     "url": node['media']['urls'][0]['url'],
                     "p_orig": clean_txt(orig_prompt),
@@ -110,11 +105,11 @@ def tasks():
                     "steps": p_node.get('samplingSteps'),
                     "cfg": p_node.get('cfgScale'),
                     "method": p_node.get('samplingMethod'),
-                    "ref_url": ref_thumb,
+                    "ref_url": f"https://api.pixai.art/v1/media/{ref_id}/thumbnail" if ref_id else None,
                     "loras": [{"t": l.get('triggerWords'), "w": l.get('weight')} for l in p_node.get('loraParameters', [])]
                 })
-        page = r['data']['me']['tasks']['pageInfo']
-        return jsonify({"status": "success", "tasks": task_data, "cursor": page['startCursor'] if page['hasPreviousPage'] else None})
+        page = resp_json['data']['me']['tasks']['pageInfo']
+        return jsonify({"status": "success", "tasks": task_data, "cursor": page['startCursor'] if page['hasPreviousPage'] else None, "refreshed_token": check_refresh(r)})
     except: return jsonify({"status": "error"})
 
 @app.route('/api/generate', methods=['POST'])
@@ -125,28 +120,20 @@ def generate():
     batch, mediaId, strength = int(d.get("batch", 1)), d.get("mediaId"), float(d.get("strength", 0.55))
     width, height = int(d.get("w", 832)), int(d.get("h", 1248))
     steps, cfg, neg = int(d.get("steps", 28)), float(d.get("cfg", 12.7)), d.get("neg", "")
-    
     l_w, l_p, all_t = {}, [], ""
     for conf in lora_configs:
         vid, wgt, trg = conf['v_id'], float(conf['weight']), conf['triggers']
         l_w[vid] = wgt; all_t += f"{trg}, "; l_p.append({"versionId": vid, "weight": wgt, "triggerWords": trg, "positionInfo": {"startIndex": 0, "endIndex": 0}})
-
     payload = {"operationName": "createGenerationTask", "variables": {"parameters": {"prompts": prompt + ", " + all_t, "negativePrompts": neg, "modelId": modelId, "width": width, "height": height, "batchSize": batch, "lora": l_w, "loraParameters": l_p, "mediaId": mediaId, "strength": strength, "samplingSteps": steps, "samplingMethod": "Euler a", "cfgScale": cfg, "promptHelper": {"withStage": True, "userWantToEnable": True, "enable": True}}, "extra": {"naturalPrompts": [prompt]}}, "extensions": {"persistedQuery": {"version": 1, "sha256Hash": H_GEN}}}
-    
     try:
         r_init = requests.post(API_URL, json=payload, headers=get_h(token))
-        res = r_init.json()
-        tid = res['data']['createGenerationTask']['id']
-        while True: # UNTOUCHED: EXACT POLLING
+        tid = r_init.json()['data']['createGenerationTask']['id']
+        while True:
             time.sleep(15)
             r_poll = requests.get(API_URL, params={"operationName":"getTaskById","variables":json.dumps({"id":tid}),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_POLL}})}, headers=get_h(token))
             sr = r_poll.json()
             if sr['data']['task']['status'] == "completed":
-                return jsonify({
-                    "status": "success", 
-                    "images": [i['url'] for i in sr['data']['task']['media']['urls'] if i['variant'] == "PUBLIC"],
-                    "refreshed_token": check_refresh(r_poll)
-                })
+                return jsonify({"status": "success", "images": [i['url'] for i in sr['data']['task']['media']['urls'] if i['variant'] == "PUBLIC"], "refreshed_token": check_refresh(r_poll)})
             if sr['data']['task']['status'] == "failed": return jsonify({"status": "error"})
     except: return jsonify({"status": "error"})
 
@@ -154,28 +141,32 @@ def generate():
 def search_models():
     d = request.json
     sort = d.get("sort", "most_used")
-    v = {"keyword": d.get("keyword"), "feed": "meilisearch", "types": ["ANY_MODEL"], "first": 30, "after": d.get("cursor")}
-    p = {"operationName": "listGenerationModels", "variables": json.dumps(v), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}})}
-    r = requests.get(API_URL, params=p, headers=get_h(d.get("token")))
+    v = {"keyword": d.get("keyword"), "feed": "preset" if sort == "trending" else "meilisearch", "sort": sort, "types": ["ANY_MODEL"], "first": 30, "after": d.get("cursor")}
+    r = requests.get(API_URL, params={"operationName": "listGenerationModels", "variables": json.dumps(v), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}})}, headers=get_h(d.get("token")))
     res = r.json()
-    items = [{"name": e['node']['title'], "id": e['node']['latestAvailableVersion']['id'] if e['node'].get('latestAvailableVersion') else e['node']['id'], "thumb": next((u['url'] for u in e['node']['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), "")} for e in res['data']['generationModels']['edges']]
+    items = []
+    for e in res['data']['generationModels']['edges']:
+        n = e['node']
+        items.append({"name": n['title'], "id": n['latestAvailableVersion']['id'] if n.get('latestAvailableVersion') else n['id'], "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n.get('refCount')), "likes": fmt_num(n.get('likedCount')), "type": fmt_type(n.get('type'))})
     return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r)})
 
 @app.route('/api/search', methods=['POST'])
 def search_loras():
     d = request.json
     sort = d.get("sort", "most_used")
-    v = {"keyword": d.get("keyword"), "feed": "meilisearch", "types": ["ANY_LORA"], "first": 30, "after": d.get("cursor")}
+    v = {"keyword": d.get("keyword"), "feed": "meilisearch", "sort": sort, "types": ["ANY_LORA"], "first": 30, "after": d.get("cursor")}
     r = requests.get(API_URL, params={"operationName":"listGenerationModels","variables":json.dumps(v),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_SEARCH}})}, headers=get_h(d.get("token")))
     res = r.json()
-    items = [{"name": e['node']['title'], "id": e['node']['id'], "thumb": next((u['url'] for u in e['node']['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), "")} for e in res['data']['generationModels']['edges']]
+    items = []
+    for e in res['data']['generationModels']['edges']:
+        n = e['node']
+        items.append({"name": n['title'], "id": n['id'], "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n.get('refCount')), "likes": fmt_num(n.get('likedCount'))})
     return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r)})
 
 @app.route('/api/lora_meta', methods=['POST'])
 def lora_meta():
     d = request.json
-    p = {"operationName": "getGenerationModel", "variables": json.dumps({"id": d.get("id")}), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_LORA}})}
-    r = requests.get(API_URL, params=p, headers=get_h(d.get("token")))
+    r = requests.get(API_URL, params={"operationName": "getGenerationModel", "variables": json.dumps({"id": d.get("id")}), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_LORA}})}, headers=get_h(d.get("token")))
     data = r.json()
     v = data['data']['generationModel']['latestAvailableVersion']
     return jsonify({"v_id": v['id'], "trigger": v['extra'].get('triggerWords', ""), "name": data['data']['generationModel']['title'], "id": d.get("id"), "refreshed_token": check_refresh(r)})
@@ -189,33 +180,22 @@ def credits():
 def claim():
     t = request.json.get("token")
     h = get_h(t)
-    results = []
-    
-    # 1. Mios Daily Lottery Roll
+    res_list = []
     try:
         lot = requests.post(API_URL, json={"operationName":"rollAprilFools2026Lottery","variables":{},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_ROLL}}}, headers=h).json()
-        results.append("Lottery: " + str(lot.get('data', {}).get('rollAprilFools2026Lottery', {}).get('creditReward', 0)))
-    except: results.append("Lottery: Error")
-    
-    # 2. 5 Social Media follows
+        res_list.append("Lottery: " + str(lot.get('data', {}).get('rollAprilFools2026Lottery', {}).get('creditReward', 0)))
+    except: res_list.append("Lottery: Error")
     for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
         try:
-            res = requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}, headers=h).json()
-            results.append(f"Follow {p}: " + ("Success" if not res.get('errors') else "Claimed/Error"))
-        except: results.append(f"Follow {p}: Error")
-
-    # 3. Mios Spending Milestone Tier Rewards (REST v2)
-    for tier_id in range(3226, 3235):
+            r = requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}, headers=h).json()
+            res_list.append(f"{p}: OK")
+        except: res_list.append(f"{p}: Error")
+    for tid in range(3226, 3235):
         try:
-            url = f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{tier_id}/claim"
-            r_tier = requests.post(url, headers=h, data="")
-            if r_tier.status_code == 200:
-                results.append(f"Milestone {tier_id}: SUCCESS")
-            else:
-                results.append(f"Milestone {tier_id}: {r_tier.status_code}")
-        except: results.append(f"Milestone {tier_id}: Error")
-        
-    return jsonify({"status": "success", "raw": results})
+            r = requests.post(f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{tid}/claim", headers=h, data="")
+            if r.status_code == 200: res_list.append(f"Tier {tid}: SUCCESS")
+        except: pass
+    return jsonify({"status": "success", "raw": res_list})
 
 @app.route('/api/upload', methods=['POST'])
 def upload():

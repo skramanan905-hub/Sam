@@ -49,6 +49,11 @@ def check_refresh(resp):
     new_t = resp.cookies.get("user_token")
     return new_t if new_t else None
 
+# --- ADDED: HOME ROUTE FOR RENDER ---
+@app.route('/')
+def index():
+    return "PixAI Master Backend is Active"
+
 @app.route('/api/daily_claim', methods=['POST'])
 def daily_claim():
     t = request.json.get("token")
@@ -205,7 +210,6 @@ def claim():
     for tier_id in range(3226, 3235):
         try:
             url = f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{tier_id}/claim"
-            # POST with empty body as per REST claim pattern
             r_tier = requests.post(url, headers=h, data="")
             if r_tier.status_code == 200:
                 results.append(f"Milestone {tier_id}: SUCCESS")

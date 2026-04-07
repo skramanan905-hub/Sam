@@ -9,6 +9,8 @@ CORS(app)
 # ================= MASTER CONFIGURATION =================
 API_URL = "https://api.pixai.art/graphql"
 DAILY_URL = "https://api.pixai.art/v2/claim/pixai-daily-credits"
+REST_FOLLOW_URL = "https://api.pixai.art/v2/quest-v2/report-social-follow"
+REST_VISIT_URL = "https://api.pixai.art/v2/quest-v2/report-visit"
 
 H_GEN    = "61b5dafa7ade64f847051cdca7024b359bae652421834b8f78423d7640f17d96"
 H_POLL   = "a32947c6b546befddacd08a3af63cc4ee2277af27fd43342a01fc0414fca3e8a"
@@ -21,7 +23,7 @@ H_UPLOAD = "dd71971acde11807d01862ff1a94657479f7e833af75eac850aa2de0a14fa1fa"
 H_SEARCH = "4d76952c681f7d0787077ddeec310f6475ab059e50546248120617abfb4031e9"
 H_MODEL_SEARCH = "1658f8e716184e95d3177d20fad189d8f7b250fb30e8401496ed0aaf34e4ad83"
 H_COST   = "50567e9680327f27a692e76f62b1b3699b24467f3747b0e14d3345d2e3077395"
-H_SET_PREF = "fb22173aa2a43ff08be4221a17094a1445cb212e1b1970a1cee8c37e98d38304"
+H_18PLUS = "fb22173aa2a43ff08be4221a17094a1445cb212e1b1970a1cee8c37e98d38304"
 
 def get_h(t): 
     return {"Authorization": f"Bearer {t.strip()}", "Content-Type": "application/json", "x-browser-id": "08df9bc9358ad97ebfe0ac86284587e5", "User-Agent": "Mozilla/5.0 (Linux; Android 15; I2301) AppleWebKit/537.36"}
@@ -92,7 +94,6 @@ def tasks():
                 p_node = node['parameters']
                 extra = p_node.get('extra', {})
                 
-                # --- UNTOUCHED: EXACT PROMPT LOGIC ---
                 natural_data = extra.get('naturalPrompts', [])
                 if isinstance(natural_data, list) and len(natural_data) > 0: orig_prompt = natural_data[0]
                 elif isinstance(natural_data, str) and len(natural_data) > 1: orig_prompt = natural_data
@@ -127,28 +128,21 @@ def generate():
     batch, mediaId, strength = int(d.get("batch", 1)), d.get("mediaId"), float(d.get("strength", 0.55))
     width, height = int(d.get("w", 832)), int(d.get("h", 1248))
     steps, cfg, neg = int(d.get("steps", 28)), float(d.get("cfg", 12.7)), d.get("neg", "")
-    
     l_w, l_p, all_t = {}, [], ""
     for conf in lora_configs:
         vid, wgt, trg = conf['v_id'], float(conf['weight']), conf['triggers']
         l_w[vid] = wgt; all_t += f"{trg}, "; l_p.append({"versionId": vid, "weight": wgt, "triggerWords": trg, "positionInfo": {"startIndex": 0, "endIndex": 0}})
-
     payload = {"operationName": "createGenerationTask", "variables": {"parameters": {"prompts": prompt + ", " + all_t, "negativePrompts": neg, "modelId": modelId, "width": width, "height": height, "batchSize": batch, "lora": l_w, "loraParameters": l_p, "mediaId": mediaId, "strength": strength, "samplingSteps": steps, "samplingMethod": "Euler a", "cfgScale": cfg, "promptHelper": {"withStage": True, "userWantToEnable": True, "enable": True}}, "extra": {"naturalPrompts": [prompt]}}, "extensions": {"persistedQuery": {"version": 1, "sha256Hash": H_GEN}}}
-    
     try:
         r_init = requests.post(API_URL, json=payload, headers=get_h(token))
         res = r_init.json()
         tid = res['data']['createGenerationTask']['id']
-        while True: # UNTOUCHED: EXACT POLLING
+        while True: 
             time.sleep(15)
             r_poll = requests.get(API_URL, params={"operationName":"getTaskById","variables":json.dumps({"id":tid}),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_POLL}})}, headers=get_h(token))
             sr = r_poll.json()
             if sr['data']['task']['status'] == "completed":
-                return jsonify({
-                    "status": "success", 
-                    "images": [i['url'] for i in sr['data']['task']['media']['urls'] if i['variant'] == "PUBLIC"],
-                    "refreshed_token": check_refresh(r_poll)
-                })
+                return jsonify({"status": "success", "images": [i['url'] for i in sr['data']['task']['media']['urls'] if i['variant'] == "PUBLIC"], "refreshed_token": check_refresh(r_poll)})
             if sr['data']['task']['status'] == "failed": return jsonify({"status": "error"})
     except: return jsonify({"status": "error"})
 
@@ -193,35 +187,32 @@ def credits():
     r = requests.get(API_URL, params={"operationName":"getMyQuota","variables":"{}","extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_CRE}})}, headers=get_h(request.json.get("token")))
     return jsonify({"credits": r.json()['data']['me']['quotaAmount'], "refreshed_token": check_refresh(r)})
 
-@app.route('/api/set_content', methods=['POST'])
-def set_content():
-    d = request.json
-    h = get_h(d.get("token"))
-    payload = {"operationName": "setPreferences", "variables": {"value": {"ageVerificationStatus": d.get("status")}}, "extensions": {"persistedQuery": {"version": 1, "sha256Hash": H_SET_PREF}}}
-    requests.post(API_URL, json=payload, headers=h)
-    return jsonify({"status": "success"})
-
 @app.route('/api/claim', methods=['POST'])
 def claim():
     t = request.json.get("token")
     h = get_h(t)
     
-    # 1. Roll
+    # 1. 18+ Enable
+    requests.post(API_URL, json={"operationName":"setPreferences","variables":{"value":{"ageVerificationStatus":"OVER18"}},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_18PLUS}}}, headers=h)
+    
+    # 2. 2 Visit Rewards
+    for u in ["https://youtu.be/nFJoUWvs0ko?si=YvjDeXw5hixETOR8", "https://pixai.art/tsubaki-2"]:
+        requests.post(REST_VISIT_URL, json={"url": u}, headers=h)
+        time.sleep(1)
+
+    # 3. Double-Dip Socials (Old Door -> New Door per platform)
+    for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
+        requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}, headers=h)
+        time.sleep(0.5)
+        requests.post(REST_FOLLOW_URL, json={"platform": p}, headers=h)
+        time.sleep(1)
+
+    # 4. Mios Daily Lottery Roll
     requests.post(API_URL, json={"operationName":"rollAprilFools2026Lottery","variables":{},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_ROLL}}}, headers=h)
     
-    # 2. Socials (Old + New)
-    p_list = ["tiktok", "youtube", "instagram", "twitter", "discord"]
-    for p in p_list:
-        requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}, headers=h)
-        requests.post("https://api.pixai.art/v2/quest-v2/report-social-follow", json={"platform": p}, headers=h)
-
-    # 3. Visits
-    requests.post("https://api.pixai.art/v2/quest-v2/report-visit", json={"url": "https://youtu.be/nFJoUWvs0ko?si=YvjDeXw5hixETOR8"}, headers=h)
-    requests.post("https://api.pixai.art/v2/quest-v2/report-visit", json={"url": "https://pixai.art/tsubaki-2"}, headers=h)
-
-    # 4. Milestones
-    for i in range(3226, 3235):
-        requests.post(f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{i}/claim", headers=h, data="")
+    # 5. Milestone Spending Tiers
+    for tier_id in range(3226, 3235):
+        requests.post(f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{tier_id}/claim", headers=h, data="")
         
     return jsonify({"status": "success"})
 

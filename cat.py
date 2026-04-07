@@ -51,7 +51,7 @@ def check_refresh(resp):
 
 @app.route('/')
 def index():
-    return "PixAI Master Backend is Active"
+    return "Active"
 
 @app.route('/api/daily_claim', methods=['POST'])
 def daily_claim():
@@ -90,16 +90,12 @@ def tasks():
             if node['status'] == "completed":
                 p_node = node['parameters']
                 extra = p_node.get('extra', {})
-                
-                # --- UNTOUCHED: EXACT PROMPT LOGIC ---
                 natural_data = extra.get('naturalPrompts', [])
                 if isinstance(natural_data, list) and len(natural_data) > 0: orig_prompt = natural_data[0]
                 elif isinstance(natural_data, str) and len(natural_data) > 1: orig_prompt = natural_data
                 else: orig_prompt = p_node.get('prompts', 'N/A')
-
                 ref_id = p_node.get('mediaId')
                 ref_thumb = f"https://api.pixai.art/v1/media/{ref_id}/thumbnail" if ref_id else None
-
                 task_data.append({
                     "url": node['media']['urls'][0]['url'],
                     "p_orig": clean_txt(orig_prompt),
@@ -126,14 +122,11 @@ def generate():
     batch, mediaId, strength = int(d.get("batch", 1)), d.get("mediaId"), float(d.get("strength", 0.55))
     width, height = int(d.get("w", 832)), int(d.get("h", 1248))
     steps, cfg, neg = int(d.get("steps", 28)), float(d.get("cfg", 12.7)), d.get("neg", "")
-    
     l_w, l_p, all_t = {}, [], ""
     for conf in lora_configs:
         vid, wgt, trg = conf['v_id'], float(conf['weight']), conf['triggers']
         l_w[vid] = wgt; all_t += f"{trg}, "; l_p.append({"versionId": vid, "weight": wgt, "triggerWords": trg, "positionInfo": {"startIndex": 0, "endIndex": 0}})
-
     payload = {"operationName": "createGenerationTask", "variables": {"parameters": {"prompts": prompt + ", " + all_t, "negativePrompts": neg, "modelId": modelId, "width": width, "height": height, "batchSize": batch, "lora": l_w, "loraParameters": l_p, "mediaId": mediaId, "strength": strength, "samplingSteps": steps, "samplingMethod": "Euler a", "cfgScale": cfg, "promptHelper": {"withStage": True, "userWantToEnable": True, "enable": True}}, "extra": {"naturalPrompts": [prompt]}}, "extensions": {"persistedQuery": {"version": 1, "sha256Hash": H_GEN}}}
-    
     try:
         r_init = requests.post(API_URL, json=payload, headers=get_h(token))
         res = r_init.json()
@@ -143,11 +136,7 @@ def generate():
             r_poll = requests.get(API_URL, params={"operationName":"getTaskById","variables":json.dumps({"id":tid}),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_POLL}})}, headers=get_h(token))
             sr = r_poll.json()
             if sr['data']['task']['status'] == "completed":
-                return jsonify({
-                    "status": "success", 
-                    "images": [i['url'] for i in sr['data']['task']['media']['urls'] if i['variant'] == "PUBLIC"],
-                    "refreshed_token": check_refresh(r_poll)
-                })
+                return jsonify({"status": "success", "images": [i['url'] for i in sr['data']['task']['media']['urls'] if i['variant'] == "PUBLIC"], "refreshed_token": check_refresh(r_poll)})
             if sr['data']['task']['status'] == "failed": return jsonify({"status": "error"})
     except: return jsonify({"status": "error"})
 
@@ -194,12 +183,13 @@ def credits():
 
 @app.route('/api/claim', methods=['POST'])
 def claim():
-    h = get_h(request.json.get("token"))
+    t = request.json.get("token")
+    h = get_h(t)
     requests.post(API_URL, json={"operationName":"rollAprilFools2026Lottery","variables":{},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_ROLL}}}, headers=h)
     for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
         requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}, headers=h)
-    for tier_id in range(3226, 3235):
-        requests.post(f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{tier_id}/claim", headers=h, data="")
+    for i in range(3226, 3235):
+        requests.post(f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{i}/claim", headers=h, data="")
     return jsonify({"status": "success"})
 
 @app.route('/api/upload', methods=['POST'])

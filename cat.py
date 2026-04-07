@@ -21,10 +21,10 @@ H_UPLOAD = "dd71971acde11807d01862ff1a94657479f7e833af75eac850aa2de0a14fa1fa"
 H_SEARCH = "4d76952c681f7d0787077ddeec310f6475ab059e50546248120617abfb4031e9"
 H_MODEL_SEARCH = "1658f8e716184e95d3177d20fad189d8f7b250fb30e8401496ed0aaf34e4ad83"
 H_COST   = "50567e9680327f27a692e76f62b1b3699b24467f3747b0e14d3345d2e3077395"
-H_PREF   = "fb22173aa2a43ff08be4221a17094a1445cb212e1b1970a1cee8c37e98d38304"
+H_18PLUS = "fb22173aa2a43ff08be4221a17094a1445cb212e1b1970a1cee8c37e98d38304"
 
 def get_h(t): 
-    return {"Authorization": f"Bearer {t.strip()}", "Content-Type": "application/json", "x-browser-id": "08df9bc9358ad97ebfe0ac86284587e5", "User-Agent": "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36"}
+    return {"Authorization": f"Bearer {t.strip()}", "Content-Type": "application/json", "x-browser-id": "08df9bc9358ad97ebfe0ac86284587e5", "User-Agent": "Mozilla/5.0 (Linux; Android 15; I2301) AppleWebKit/537.36"}
 
 def clean_txt(text):
     if not text or text == "null": return "None"
@@ -53,16 +53,6 @@ def check_refresh(resp):
 @app.route('/')
 def index():
     return "Active"
-
-@app.route('/api/set_content', methods=['POST'])
-def set_content():
-    t = request.json.get("token")
-    mode = request.json.get("mode")
-    payload = {"operationName":"setPreferences","variables":{"value":{"ageVerificationStatus":mode}},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_PREF}}}
-    try:
-        r = requests.post(API_URL, json=payload, headers=get_h(t))
-        return jsonify({"status": "success", "refreshed_token": check_refresh(r)})
-    except: return jsonify({"status": "error"})
 
 @app.route('/api/daily_claim', methods=['POST'])
 def daily_claim():
@@ -106,7 +96,6 @@ def tasks():
                 elif isinstance(natural_data, str) and len(natural_data) > 1: orig_prompt = natural_data
                 else: orig_prompt = p_node.get('prompts', 'N/A')
                 ref_id = p_node.get('mediaId')
-                ref_thumb = f"https://api.pixai.art/v1/media/{ref_id}/thumbnail" if ref_id else None
                 task_data.append({
                     "url": node['media']['urls'][0]['url'],
                     "p_orig": clean_txt(orig_prompt),
@@ -118,7 +107,7 @@ def tasks():
                     "steps": p_node.get('samplingSteps'),
                     "cfg": p_node.get('cfgScale'),
                     "method": p_node.get('samplingMethod'),
-                    "ref_url": ref_thumb,
+                    "ref_url": f"https://api.pixai.art/v1/media/{ref_id}/thumbnail" if ref_id else None,
                     "loras": [{"t": l.get('triggerWords'), "w": l.get('weight')} for l in p_node.get('loraParameters', [])]
                 })
         page = resp_json['data']['me']['tasks']['pageInfo']
@@ -142,7 +131,7 @@ def generate():
         r_init = requests.post(API_URL, json=payload, headers=get_h(token))
         res = r_init.json()
         tid = res['data']['createGenerationTask']['id']
-        while True: # UNTOUCHED: EXACT POLLING
+        while True:
             time.sleep(15)
             r_poll = requests.get(API_URL, params={"operationName":"getTaskById","variables":json.dumps({"id":tid}),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_POLL}})}, headers=get_h(token))
             sr = r_poll.json()
@@ -192,20 +181,29 @@ def credits():
     r = requests.get(API_URL, params={"operationName":"getMyQuota","variables":"{}","extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_CRE}})}, headers=get_h(request.json.get("token")))
     return jsonify({"credits": r.json()['data']['me']['quotaAmount'], "refreshed_token": check_refresh(r)})
 
+@app.route('/api/set_content', methods=['POST'])
+def set_content():
+    d = request.json
+    h = get_h(d.get("token"))
+    payload = {"operationName": "setPreferences", "variables": {"value": {"ageVerificationStatus": d.get("status")}}, "extensions": {"persistedQuery": {"version": 1, "sha256Hash": H_18PLUS}}}
+    requests.post(API_URL, json=payload, headers=h)
+    return jsonify({"status": "success"})
+
 @app.route('/api/claim', methods=['POST'])
 def claim():
-    t = request.json.get("token")
-    h = get_h(t)
-    platforms = ["tiktok", "youtube", "instagram", "twitter", "discord"]
-    for p in platforms:
-        requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}, headers=h)
-        requests.post("https://api.pixai.art/v2/quest-v2/report-social-follow", json={"platform":p}, headers=h)
-    visits = ["https://youtu.be/nFJoUWvs0ko?si=YvjDeXw5hixETOR8", "https://pixai.art/tsubaki-2"]
-    for url in visits:
-        requests.post("https://api.pixai.art/v2/quest-v2/report-visit", json={"url":url}, headers=h)
+    h = get_h(request.json.get("token"))
+    # Lottery + Old Socials
     requests.post(API_URL, json={"operationName":"rollAprilFools2026Lottery","variables":{},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_ROLL}}}, headers=h)
-    for tier in range(3226, 3235):
-        requests.post(f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{tier}/claim", headers=h, data="")
+    for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
+        requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}, headers=h)
+        # New Socials (REST)
+        requests.post("https://api.pixai.art/v2/quest-v2/report-social-follow", json={"platform": p}, headers=h)
+    # 2 Visits
+    requests.post("https://api.pixai.art/v2/quest-v2/report-visit", json={"url": "https://youtu.be/nFJoUWvs0ko?si=YvjDeXw5hixETOR8"}, headers=h)
+    requests.post("https://api.pixai.art/v2/quest-v2/report-visit", json={"url": "https://pixai.art/tsubaki-2"}, headers=h)
+    # Milestones
+    for i in range(3226, 3235):
+        requests.post(f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{i}/claim", headers=h, data="")
     return jsonify({"status": "success"})
 
 @app.route('/api/upload', methods=['POST'])

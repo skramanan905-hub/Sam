@@ -21,7 +21,7 @@ H_UPLOAD = "dd71971acde11807d01862ff1a94657479f7e833af75eac850aa2de0a14fa1fa"
 H_SEARCH = "4d76952c681f7d0787077ddeec310f6475ab059e50546248120617abfb4031e9"
 H_MODEL_SEARCH = "1658f8e716184e95d3177d20fad189d8f7b250fb30e8401496ed0aaf34e4ad83"
 H_COST   = "50567e9680327f27a692e76f62b1b3699b24467f3747b0e14d3345d2e3077395"
-H_PREF   = "fb22173aa2a43ff08be4221a17094a1445cb212e1b1970a1cee8c37e98d38304" # Preferences
+H_PREF   = "fb22173aa2a43ff08be4221a17094a1445cb212e1b1970a1cee8c37e98d38304"
 
 def get_h(t): 
     return {"Authorization": f"Bearer {t.strip()}", "Content-Type": "application/json", "x-browser-id": "08df9bc9358ad97ebfe0ac86284587e5", "User-Agent": "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36"}
@@ -57,7 +57,7 @@ def index():
 @app.route('/api/set_content', methods=['POST'])
 def set_content():
     t = request.json.get("token")
-    mode = request.json.get("mode") # "OVER18" or "MINOR"
+    mode = request.json.get("mode")
     payload = {"operationName":"setPreferences","variables":{"value":{"ageVerificationStatus":mode}},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_PREF}}}
     try:
         r = requests.post(API_URL, json=payload, headers=get_h(t))
@@ -142,7 +142,7 @@ def generate():
         r_init = requests.post(API_URL, json=payload, headers=get_h(token))
         res = r_init.json()
         tid = res['data']['createGenerationTask']['id']
-        while True:
+        while True: # UNTOUCHED: EXACT POLLING
             time.sleep(15)
             r_poll = requests.get(API_URL, params={"operationName":"getTaskById","variables":json.dumps({"id":tid}),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_POLL}})}, headers=get_h(token))
             sr = r_poll.json()
@@ -196,20 +196,14 @@ def credits():
 def claim():
     t = request.json.get("token")
     h = get_h(t)
-    # 1. OLD GRAPHQL SOCIALS
-    for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
-        payload = {"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}
-        requests.post(API_URL, json=payload, headers=h)
-    # 2. NEW REST SOCIALS
-    for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
+    platforms = ["tiktok", "youtube", "instagram", "twitter", "discord"]
+    for p in platforms:
+        requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}, headers=h)
         requests.post("https://api.pixai.art/v2/quest-v2/report-social-follow", json={"platform":p}, headers=h)
-    # 3. VISIT TASKS
     visits = ["https://youtu.be/nFJoUWvs0ko?si=YvjDeXw5hixETOR8", "https://pixai.art/tsubaki-2"]
     for url in visits:
         requests.post("https://api.pixai.art/v2/quest-v2/report-visit", json={"url":url}, headers=h)
-    # 4. MIOS ROLL
     requests.post(API_URL, json={"operationName":"rollAprilFools2026Lottery","variables":{},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_ROLL}}}, headers=h)
-    # 5. MIOS MILESTONES
     for tier in range(3226, 3235):
         requests.post(f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{tier}/claim", headers=h, data="")
     return jsonify({"status": "success"})

@@ -131,7 +131,7 @@ def generate():
         r_init = requests.post(API_URL, json=payload, headers=get_h(token))
         res = r_init.json()
         tid = res['data']['createGenerationTask']['id']
-        while True: # UNTOUCHED: EXACT POLLING
+        while True:
             time.sleep(15)
             r_poll = requests.get(API_URL, params={"operationName":"getTaskById","variables":json.dumps({"id":tid}),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_POLL}})}, headers=get_h(token))
             sr = r_poll.json()
@@ -185,11 +185,16 @@ def credits():
 def claim():
     t = request.json.get("token")
     h = get_h(t)
+    # 1. Mios Daily Lottery Roll
     requests.post(API_URL, json={"operationName":"rollAprilFools2026Lottery","variables":{},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_ROLL}}}, headers=h)
+    # 2. 5 Social Media follows
     for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
         requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}, headers=h)
+        time.sleep(0.5)
+    # 3. Mios Spending Milestone Tier Rewards (3226 to 3234)
     for i in range(3226, 3235):
         requests.post(f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{i}/claim", headers=h, data="")
+        time.sleep(0.5)
     return jsonify({"status": "success"})
 
 @app.route('/api/upload', methods=['POST'])

@@ -83,7 +83,7 @@ def tasks():
     vars = {"last": 30, "before": cursor, "parameterFields": p_fields}
     p = {"operationName": "listMyTasks", "variables": json.dumps(vars), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_LIST}})}
     try:
-        r = requests.get(API_URL, params=p, headers=get_h(t)) # GET method from cat.py
+        r = requests.get(API_URL, params=p, headers=get_h(t))
         resp_json = r.json()
         edges = resp_json['data']['me']['tasks']['edges']
         task_data = []
@@ -92,15 +92,14 @@ def tasks():
             if node['status'] == "completed":
                 p_node = node['parameters']
                 extra = p_node.get('extra', {})
-                # --- STRICT CAT.PY HISTORY LOGIC ---
+                # --- EXACT CAT.PY LOGIC ---
                 natural_data = extra.get('naturalPrompts', [])
                 if isinstance(natural_data, list) and len(natural_data) > 0: orig_prompt = natural_data[0]
                 elif isinstance(natural_data, str) and len(natural_data) > 1: orig_prompt = natural_data
                 else: orig_prompt = p_node.get('prompts', 'N/A')
                 ref_id = p_node.get('mediaId')
                 task_data.append({"url": node['media']['urls'][0]['url'], "p_orig": clean_txt(orig_prompt), "p_final": clean_txt(p_node.get('prompts')), "neg": clean_txt(p_node.get('negativePrompts', "")), "id": node['id'], "time": format_pixai_time(node.get('createdAt')), "size": f"{p_node.get('width')}x{p_node.get('height')}", "steps": p_node.get('samplingSteps'), "cfg": p_node.get('cfgScale'), "method": p_node.get('samplingMethod'), "ref_url": f"https://api.pixai.art/v1/media/{ref_id}/thumbnail" if ref_id else None, "loras": [{"t": l.get('triggerWords'), "w": l.get('weight')} for l in p_node.get('loraParameters', [])]})
-        page = resp_json['data']['me']['tasks']['pageInfo']
-        return jsonify({"status": "success", "tasks": task_data, "cursor": page['startCursor'] if page['hasPreviousPage'] else None, "refreshed_token": check_refresh(r)})
+        return jsonify({"status": "success", "tasks": task_data, "cursor": resp_json['data']['me']['tasks']['pageInfo']['startCursor'] if resp_json['data']['me']['tasks']['pageInfo']['hasPreviousPage'] else None, "refreshed_token": check_refresh(r)})
     except: return jsonify({"status": "error"})
 
 @app.route('/api/generate', methods=['POST'])
@@ -119,7 +118,7 @@ def generate():
     try:
         r_init = requests.post(API_URL, json=payload, headers=get_h(token))
         tid = r_init.json()['data']['createGenerationTask']['id']
-        while True: # STRICT CAT.PY POLLING
+        while True:
             time.sleep(15)
             r_poll = requests.get(API_URL, params={"operationName":"getTaskById","variables":json.dumps({"id":tid}),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_POLL}})}, headers=get_h(token))
             sr = r_poll.json()
@@ -133,8 +132,7 @@ def search_models():
     d = request.json
     sort = d.get("sort", "most_used")
     v = {"keyword": d.get("keyword"), "feed": "preset" if sort == "trending" else "meilisearch", "sort": sort, "types": ["ANY_MODEL"], "first": 30, "after": d.get("cursor")}
-    params = {"operationName": "listGenerationModels", "variables": json.dumps(v), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}})}
-    r = requests.get(API_URL, params=params, headers=get_h(d.get("token"))) # GET method from cat.py
+    r = requests.get(API_URL, params={"operationName": "listGenerationModels", "variables": json.dumps(v), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}})}, headers=get_h(d.get("token")))
     res = r.json()
     items = [{"name": n['node']['title'], "id": n['node']['latestAvailableVersion']['id'] if n['node'].get('latestAvailableVersion') else n['node']['id'], "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n['node'].get('refCount')), "likes": fmt_num(n['node'].get('likedCount')), "type": fmt_type(n['node'].get('type'))} for n in res['data']['generationModels']['edges']]
     return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r)})
@@ -144,8 +142,7 @@ def search_loras():
     d = request.json
     sort = d.get("sort", "most_used")
     v = {"keyword": d.get("keyword"), "feed": "meilisearch", "sort": sort, "types": ["ANY_LORA"], "first": 30, "after": d.get("cursor")}
-    params = {"operationName": "listGenerationModels", "variables": json.dumps(v), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_SEARCH}})}
-    r = requests.get(API_URL, params=params, headers=get_h(d.get("token")))
+    r = requests.get(API_URL, params={"operationName":"listGenerationModels","variables":json.dumps(v),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_SEARCH}})}, headers=get_h(d.get("token")))
     res = r.json()
     items = [{"name": n['node']['title'], "id": n['node']['id'], "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n['node'].get('refCount')), "likes": fmt_num(n['node'].get('likedCount'))} for n in res['data']['generationModels']['edges']]
     return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r)})

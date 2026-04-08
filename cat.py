@@ -25,9 +25,6 @@ H_MODEL_SEARCH = "1658f8e716184e95d3177d20fad189d8f7b250fb30e8401496ed0aaf34e4ad
 H_COST   = "50567e9680327f27a692e76f62b1b3699b24467f3747b0e14d3345d2e3077395"
 H_18PLUS = "fb22173aa2a43ff08be4221a17094a1445cb212e1b1970a1cee8c37e98d38304"
 
-# Query string from py 46 to fix the error in your screenshot
-QUERY_REW = "mutation followSocialMedia($platform: String!) { followSocialMedia(platform: $platform) { success } }"
-
 def get_h(t): 
     return {"Authorization": f"Bearer {t.strip()}", "Content-Type": "application/json", "x-browser-id": "08df9bc9358ad97ebfe0ac86284587e5", "User-Agent": "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36"}
 
@@ -96,12 +93,13 @@ def tasks():
             if node['status'] == "completed":
                 p_node = node['parameters']
                 extra = p_node.get('extra', {})
+                
                 natural_data = extra.get('naturalPrompts', [])
                 if isinstance(natural_data, list) and len(natural_data) > 0: orig_prompt = natural_data[0]
                 elif isinstance(natural_data, str) and len(natural_data) > 1: orig_prompt = natural_data
                 else: orig_prompt = p_node.get('prompts', 'N/A')
+
                 ref_id = p_node.get('mediaId')
-                ref_thumb = f"https://api.pixai.art/v1/media/{ref_id}/thumbnail" if ref_id else None
                 task_data.append({
                     "url": node['media']['urls'][0]['url'],
                     "p_orig": clean_txt(orig_prompt),
@@ -113,11 +111,10 @@ def tasks():
                     "steps": p_node.get('samplingSteps'),
                     "cfg": p_node.get('cfgScale'),
                     "method": p_node.get('samplingMethod'),
-                    "ref_url": ref_thumb,
+                    "ref_url": f"https://api.pixai.art/v1/media/{ref_id}/thumbnail" if ref_id else None,
                     "loras": [{"t": l.get('triggerWords'), "w": l.get('weight')} for l in p_node.get('loraParameters', [])]
                 })
-        page = resp_json['data']['me']['tasks']['pageInfo']
-        return jsonify({"status": "success", "tasks": task_data, "cursor": page['startCursor'] if page['hasPreviousPage'] else None, "refreshed_token": check_refresh(r)})
+        return jsonify({"status": "success", "tasks": task_data, "cursor": resp_json['data']['me']['tasks']['pageInfo']['startCursor'] if resp_json['data']['me']['tasks']['pageInfo']['hasPreviousPage'] else None, "refreshed_token": check_refresh(r)})
     except: return jsonify({"status": "error"})
 
 @app.route('/api/generate', methods=['POST'])
@@ -150,10 +147,9 @@ def search_models():
     d = request.json
     sort = d.get("sort", "most_used")
     v = {"keyword": d.get("keyword"), "feed": "preset" if sort == "trending" else "meilisearch", "sort": sort, "types": ["ANY_MODEL"], "first": 30, "after": d.get("cursor")}
-    p = {"operationName": "listGenerationModels", "variables": json.dumps(v), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}})}
-    r = requests.get(API_URL, params=p, headers=get_h(d.get("token")))
+    r = requests.get(API_URL, params={"operationName": "listGenerationModels", "variables": json.dumps(v), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}})}, headers=get_h(d.get("token")))
     res = r.json()
-    items = [{"name": n['node']['title'], "id": n['node']['latestAvailableVersion']['id'] if n.get('latestAvailableVersion') else n['id'], "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n['node'].get('refCount')), "likes": fmt_num(n['node'].get('likedCount')), "type": fmt_type(n['node'].get('type'))} for n in res['data']['generationModels']['edges']]
+    items = [{"name": n['node']['title'], "id": n['node']['latestAvailableVersion']['id'] if n.get('latestAvailableVersion') else n['id'], "thumb": next((u['url'] for u in n['node']['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n['node'].get('refCount')), "likes": fmt_num(n['node'].get('likedCount')), "type": fmt_type(n['node'].get('type'))} for n in res['data']['generationModels']['edges']]
     return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r)})
 
 @app.route('/api/search', methods=['POST'])
@@ -163,7 +159,7 @@ def search_loras():
     v = {"keyword": d.get("keyword"), "feed": "meilisearch", "sort": sort, "types": ["ANY_LORA"], "first": 30, "after": d.get("cursor")}
     r = requests.get(API_URL, params={"operationName":"listGenerationModels","variables":json.dumps(v),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_SEARCH}})}, headers=get_h(d.get("token")))
     res = r.json()
-    items = [{"name": n['node']['title'], "id": n['node']['id'], "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n['node'].get('refCount')), "likes": fmt_num(n['node'].get('likedCount'))} for n in res['data']['generationModels']['edges']]
+    items = [{"name": n['node']['title'], "id": n['node']['id'], "thumb": next((u['url'] for u in n['node']['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n['node'].get('refCount')), "likes": fmt_num(n['node'].get('likedCount'))} for n in res['data']['generationModels']['edges']]
     return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r)})
 
 @app.route('/api/lora_meta', methods=['POST'])
@@ -183,14 +179,7 @@ def credits():
 def claim_old():
     h, logs = get_h(request.json.get("token")), []
     for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
-        # Added 'query' text from py 46 here to fix PersistedQueryNotFound error
-        payload = {
-            "operationName": "followSocialMedia",
-            "variables": {"platform": p},
-            "query": QUERY_REW,
-            "extensions": {"persistedQuery": {"version": 1, "sha256Hash": H_REW}}
-        }
-        r = requests.post(API_URL, json=payload, headers=h)
+        r = requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}, headers=h)
         logs.append({p: r.text}); time.sleep(1)
     return jsonify({"status": "success", "raw": logs})
 
@@ -233,4 +222,8 @@ def upload():
     r1 = requests.post(API_URL, json={"operationName":"uploadMedia","variables":{"input":{"type":"IMAGE","provider":"S3"}},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_UPLOAD}}}, headers=h).json()
     requests.put(r1['data']['uploadMedia']['uploadUrl'], data=f)
     ext_id = r1['data']['uploadMedia']['uploadUrl'].split('/')[-1].split('?')[0]
-    r3 = requests.post(API_URL, json={"operationName":"uploadMedia","variables":{"input":{"type":"IMAGE","provider":"S3","externalId":ext_id}},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_UPLOAD}}}, headers=h).json(
+    r3 = requests.post(API_URL, json={"operationName":"uploadMedia","variables":{"input":{"type":"IMAGE","provider":"S3","externalId":ext_id}},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_UPLOAD}}}, headers=h).json()
+    return jsonify({"success": True, "mediaId": r3['data']['uploadMedia']['mediaId']})
+
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))

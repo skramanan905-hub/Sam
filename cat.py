@@ -15,8 +15,8 @@ REST_VISIT_URL = "https://api.pixai.art/v2/quest-v2/report-visit"
 H_GEN    = "61b5dafa7ade64f847051cdca7024b359bae652421834b8f78423d7640f17d96"
 H_POLL   = "a32947c6b546befddacd08a3af63cc4ee2277af27fd43342a01fc0414fca3e8a"
 H_LORA   = "4e1614f7373d676cb8ec17975796188369ce321a6e78336558ec50f0c2317840"
-H_ROLL   = "f0778d88963cc4e40749a8ecd9d510808b4a14cd63fac498e7763e6d5d780e5e" # Mios Roll
-H_REW    = "923002464a8e816706394061c18316cd2d14f5f025dbd1d08020e44cd8a23546" # Social Follow
+H_ROLL   = "f0778d88963cc4e40749a8ecd9d510808b4a14cd63fac498e7763e6d5d780e5e"
+H_REW    = "923002464a8e816706394061c18316cd2d14f5f025dbd1d08020e44cd8a23546"
 H_CRE    = "9356b42a4ff6e987347a1f1ee3de7aba4bd103b1cdbfbbc4c5c5fcf52767ad66"
 H_LIST   = "cc067203ddd0846c19d9e247d837c32da498247ec252fe30828434f2f136f53d"
 H_UPLOAD = "dd71971acde11807d01862ff1a94657479f7e833af75eac850aa2de0a14fa1fa"
@@ -26,7 +26,7 @@ H_COST   = "50567e9680327f27a692e76f62b1b3699b24467f3747b0e14d3345d2e3077395"
 H_18PLUS = "fb22173aa2a43ff08be4221a17094a1445cb212e1b1970a1cee8c37e98d38304"
 
 def get_h(t): 
-    return {"Authorization": f"Bearer {t.strip()}", "Content-Type": "application/json", "x-browser-id": "08df9bc9358ad97ebfe0ac86284587e5", "User-Agent": "Mozilla/5.0 (Linux; Android 15; I2301) AppleWebKit/537.36"}
+    return {"Authorization": f"Bearer {t.strip()}", "Content-Type": "application/json", "x-browser-id": "08df9bc9358ad97ebfe0ac86284587e5", "User-Agent": "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36"}
 
 def clean_txt(text):
     if not text or text == "null": return "None"
@@ -94,6 +94,7 @@ def tasks():
                 p_node = node['parameters']
                 extra = p_node.get('extra', {})
                 
+                # --- UNTOUCHED: EXACT PROMPT LOGIC FROM CAT.PY ---
                 natural_data = extra.get('naturalPrompts', [])
                 if isinstance(natural_data, list) and len(natural_data) > 0: orig_prompt = natural_data[0]
                 elif isinstance(natural_data, str) and len(natural_data) > 1: orig_prompt = natural_data
@@ -137,7 +138,7 @@ def generate():
         r_init = requests.post(API_URL, json=payload, headers=get_h(token))
         res = r_init.json()
         tid = res['data']['createGenerationTask']['id']
-        while True: 
+        while True: # UNTOUCHED: EXACT POLLING FROM CAT.PY
             time.sleep(15)
             r_poll = requests.get(API_URL, params={"operationName":"getTaskById","variables":json.dumps({"id":tid}),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_POLL}})}, headers=get_h(token))
             sr = r_poll.json()
@@ -192,7 +193,7 @@ def claim():
     t = request.json.get("token")
     h = get_h(t)
     
-    # 1. 18+ Enable
+    # 1. Enable 18+
     requests.post(API_URL, json={"operationName":"setPreferences","variables":{"value":{"ageVerificationStatus":"OVER18"}},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_18PLUS}}}, headers=h)
     
     # 2. 2 Visit Rewards
@@ -200,17 +201,17 @@ def claim():
         requests.post(REST_VISIT_URL, json={"url": u}, headers=h)
         time.sleep(1)
 
-    # 3. Double-Dip Socials (Old Door -> New Door per platform)
+    # 3. Double-Dip Socials
     for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
         requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}, headers=h)
         time.sleep(0.5)
         requests.post(REST_FOLLOW_URL, json={"platform": p}, headers=h)
         time.sleep(1)
 
-    # 4. Mios Daily Lottery Roll
+    # 4. Mios Roll
     requests.post(API_URL, json={"operationName":"rollAprilFools2026Lottery","variables":{},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_ROLL}}}, headers=h)
     
-    # 5. Milestone Spending Tiers
+    # 5. Milestone Tiers
     for tier_id in range(3226, 3235):
         requests.post(f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{tier_id}/claim", headers=h, data="")
         

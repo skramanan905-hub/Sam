@@ -53,7 +53,8 @@ def check_refresh(resp):
     return new_t if new_t else None
 
 @app.route('/')
-def index(): return "Active"
+def index():
+    return "Active"
 
 @app.route('/api/daily_claim', methods=['POST'])
 def daily_claim():
@@ -75,6 +76,7 @@ def compute_cost():
         return jsonify({"cost": r.json()['data']['computeTaskCost']['cost']})
     except: return jsonify({"cost": 0})
 
+# --- FIXED: EXACT TASKS LOGIC FROM CAT.PY ---
 @app.route('/api/tasks', methods=['POST'])
 def tasks():
     d = request.json
@@ -92,14 +94,33 @@ def tasks():
             if node['status'] == "completed":
                 p_node = node['parameters']
                 extra = p_node.get('extra', {})
-                # --- EXACT CAT.PY HISTORY PROMPT LOGIC ---
+                
+                # Prompt Logic
                 natural_data = extra.get('naturalPrompts', [])
                 if isinstance(natural_data, list) and len(natural_data) > 0: orig_prompt = natural_data[0]
                 elif isinstance(natural_data, str) and len(natural_data) > 1: orig_prompt = natural_data
                 else: orig_prompt = p_node.get('prompts', 'N/A')
+
+                # Reference Image Detail
                 ref_id = p_node.get('mediaId')
-                task_data.append({"url": node['media']['urls'][0]['url'], "p_orig": clean_txt(orig_prompt), "p_final": clean_txt(p_node.get('prompts')), "neg": clean_txt(p_node.get('negativePrompts', "")), "id": node['id'], "time": format_pixai_time(node.get('createdAt')), "size": f"{p_node.get('width')}x{p_node.get('height')}", "steps": p_node.get('samplingSteps'), "cfg": p_node.get('cfgScale'), "method": p_node.get('samplingMethod'), "ref_url": f"https://api.pixai.art/v1/media/{ref_id}/thumbnail" if ref_id else None, "loras": [{"t": l.get('triggerWords'), "w": l.get('weight')} for l in p_node.get('loraParameters', [])]})
-        return jsonify({"status": "success", "tasks": task_data, "cursor": resp_json['data']['me']['tasks']['pageInfo']['startCursor'] if resp_json['data']['me']['tasks']['pageInfo']['hasPreviousPage'] else None, "refreshed_token": check_refresh(r)})
+                ref_thumb = f"https://api.pixai.art/v1/media/{ref_id}/thumbnail" if ref_id else None
+
+                task_data.append({
+                    "url": node['media']['urls'][0]['url'],
+                    "p_orig": clean_txt(orig_prompt),
+                    "p_final": clean_txt(p_node.get('prompts')),
+                    "neg": clean_txt(p_node.get('negativePrompts', "")),
+                    "id": node['id'],
+                    "time": format_pixai_time(node.get('createdAt')),
+                    "size": f"{p_node.get('width')}x{p_node.get('height')}",
+                    "steps": p_node.get('samplingSteps'),
+                    "cfg": p_node.get('cfgScale'),
+                    "method": p_node.get('samplingMethod'),
+                    "ref_url": ref_thumb,
+                    "loras": [{"t": l.get('triggerWords'), "w": l.get('weight')} for l in p_node.get('loraParameters', [])]
+                })
+        page = resp_json['data']['me']['tasks']['pageInfo']
+        return jsonify({"status": "success", "tasks": task_data, "cursor": page['startCursor'] if page['hasPreviousPage'] else None, "refreshed_token": check_refresh(r)})
     except: return jsonify({"status": "error"})
 
 @app.route('/api/generate', methods=['POST'])
@@ -118,7 +139,7 @@ def generate():
     try:
         r_init = requests.post(API_URL, json=payload, headers=get_h(token))
         tid = r_init.json()['data']['createGenerationTask']['id']
-        while True: # EXACT POLLING FROM CAT.PY
+        while True:
             time.sleep(15)
             r_poll = requests.get(API_URL, params={"operationName":"getTaskById","variables":json.dumps({"id":tid}),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_POLL}})}, headers=get_h(token))
             sr = r_poll.json()
@@ -127,14 +148,16 @@ def generate():
             if sr['data']['task']['status'] == "failed": return jsonify({"status": "error"})
     except: return jsonify({"status": "error"})
 
+# --- FIXED: EXACT SEARCH_MODELS LOGIC FROM CAT.PY ---
 @app.route('/api/search_models', methods=['POST'])
 def search_models():
     d = request.json
     sort = d.get("sort", "most_used")
-    v = {"keyword": d.get("keyword"), "feed": "preset" if sort=="trending" else "meilisearch", "sort": sort, "types": ["ANY_MODEL"], "first": 30, "after": d.get("cursor")}
-    r = requests.get(API_URL, params={"operationName": "listGenerationModels", "variables": json.dumps(v), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}})}, headers=get_h(d.get("token")))
+    v = {"keyword": d.get("keyword"), "feed": "preset" if sort == "trending" else "meilisearch", "sort": sort, "types": ["ANY_MODEL"], "first": 30, "after": d.get("cursor")}
+    p = {"operationName": "listGenerationModels", "variables": json.dumps(v), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}})}
+    r = requests.get(API_URL, params=p, headers=get_h(d.get("token")))
     res = r.json()
-    items = [{"name": n['node']['title'], "id": n['node']['latestAvailableVersion']['id'] if n.get('latestAvailableVersion') else n['id'], "thumb": next((u['url'] for u in n['node']['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n['node'].get('refCount')), "likes": fmt_num(n['node'].get('likedCount')), "type": fmt_type(n['node'].get('type'))} for n in res['data']['generationModels']['edges']]
+    items = [{"name": n['node']['title'], "id": n['node']['latestAvailableVersion']['id'] if n['node'].get('latestAvailableVersion') else n['node']['id'], "thumb": next((u['url'] for u in n['node']['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n['node'].get('refCount')), "likes": fmt_num(n['node'].get('likedCount')), "type": fmt_type(n['node'].get('type'))} for n in res['data']['generationModels']['edges']]
     return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r)})
 
 @app.route('/api/search', methods=['POST'])
@@ -144,7 +167,7 @@ def search_loras():
     v = {"keyword": d.get("keyword"), "feed": "meilisearch", "sort": sort, "types": ["ANY_LORA"], "first": 30, "after": d.get("cursor")}
     r = requests.get(API_URL, params={"operationName":"listGenerationModels","variables":json.dumps(v),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_SEARCH}})}, headers=get_h(d.get("token")))
     res = r.json()
-    items = [{"name": n['node']['title'], "id": n['node']['id'], "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n['node'].get('refCount')), "likes": fmt_num(n['node'].get('likedCount'))} for n in res['data']['generationModels']['edges']]
+    items = [{"name": n['node']['title'], "id": n['node']['id'], "thumb": next((u['url'] for u in n['node']['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n['node'].get('refCount')), "likes": fmt_num(n['node'].get('likedCount'))} for n in res['data']['generationModels']['edges']]
     return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r)})
 
 @app.route('/api/lora_meta', methods=['POST'])
@@ -165,7 +188,7 @@ def claim_old():
     h, logs = get_h(request.json.get("token")), []
     for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
         r = requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}, headers=h)
-        logs.append({p: r.text})
+        logs.append({p: r.text}); time.sleep(1)
     return jsonify({"status": "success", "raw": logs})
 
 @app.route('/api/claim_new', methods=['POST'])
@@ -173,7 +196,7 @@ def claim_new():
     h, logs = get_h(request.json.get("token")), []
     for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
         r = requests.post(REST_FOLLOW_URL, json={"platform": p}, headers=h)
-        logs.append({p: r.text})
+        logs.append({p: r.text}); time.sleep(1)
     return jsonify({"status": "success", "raw": logs})
 
 @app.route('/api/claim_visits', methods=['POST'])
@@ -181,7 +204,7 @@ def claim_visits():
     h, logs = get_h(request.json.get("token")), []
     for u in ["https://youtu.be/nFJoUWvs0ko?si=YvjDeXw5hixETOR8", "https://pixai.art/tsubaki-2"]:
         r = requests.post(REST_VISIT_URL, json={"url": u}, headers=h)
-        logs.append({u: r.text})
+        logs.append({u: r.text}); time.sleep(1.5)
     return jsonify({"status": "success", "raw": logs})
 
 @app.route('/api/claim_mios', methods=['POST'])
@@ -191,7 +214,7 @@ def claim_mios():
     logs.append({"lottery": r1.text})
     for i in range(3226, 3235):
         r_t = requests.post(f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{i}/claim", headers=h, data="")
-        logs.append({f"tier_{i}": r_t.status_code})
+        logs.append({f"tier_{i}": r_t.status_code}); time.sleep(0.5)
     return jsonify({"status": "success", "raw": logs})
 
 @app.route('/api/enable_18', methods=['POST'])

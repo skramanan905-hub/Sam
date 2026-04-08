@@ -60,7 +60,7 @@ def daily_claim():
     t = request.json.get("token")
     try:
         r = requests.post(DAILY_URL, headers=get_h(t), data="")
-        return jsonify({"status": "success", "msg": r.text, "refreshed_token": check_refresh(r)})
+        return jsonify({"status": "success", "raw": r.text, "refreshed_token": check_refresh(r)})
     except: return jsonify({"status": "error"})
 
 @app.route('/api/compute_cost', methods=['POST'])
@@ -92,6 +92,7 @@ def tasks():
             if node['status'] == "completed":
                 p_node = node['parameters']
                 extra = p_node.get('extra', {})
+                # --- UNTOUCHED CAT.PY HISTORY LOGIC ---
                 natural_data = extra.get('naturalPrompts', [])
                 if isinstance(natural_data, list) and len(natural_data) > 0: orig_prompt = natural_data[0]
                 elif isinstance(natural_data, str) and len(natural_data) > 1: orig_prompt = natural_data
@@ -133,7 +134,7 @@ def search_models():
     v = {"keyword": d.get("keyword"), "feed": "preset" if sort == "trending" else "meilisearch", "sort": sort, "types": ["ANY_MODEL"], "first": 30, "after": d.get("cursor")}
     r = requests.get(API_URL, params={"operationName": "listGenerationModels", "variables": json.dumps(v), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}})}, headers=get_h(d.get("token")))
     res = r.json()
-    items = [{"name": n['node']['title'], "id": n['node']['latestAvailableVersion']['id'] if n['node'].get('latestAvailableVersion') else n['node']['id'], "thumb": next((u['url'] for u in n['node']['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n['node'].get('refCount')), "likes": fmt_num(n['node'].get('likedCount')), "type": fmt_type(n['node'].get('type'))} for n in res['data']['generationModels']['edges']]
+    items = [{"name": n['node']['title'], "id": n['node']['latestAvailableVersion']['id'] if n['node'].get('latestAvailableVersion') else n['node']['id'], "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n['node'].get('refCount')), "likes": fmt_num(n['node'].get('likedCount')), "type": fmt_type(n['node'].get('type'))} for n in res['data']['generationModels']['edges']]
     return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r)})
 
 @app.route('/api/search', methods=['POST'])
@@ -143,7 +144,7 @@ def search_loras():
     v = {"keyword": d.get("keyword"), "feed": "meilisearch", "sort": sort, "types": ["ANY_LORA"], "first": 30, "after": d.get("cursor")}
     r = requests.get(API_URL, params={"operationName":"listGenerationModels","variables":json.dumps(v),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_SEARCH}})}, headers=get_h(d.get("token")))
     res = r.json()
-    items = [{"name": n['node']['title'], "id": n['node']['id'], "thumb": next((u['url'] for u in n['node']['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n['node'].get('refCount')), "likes": fmt_num(n['node'].get('likedCount'))} for n in res['data']['generationModels']['edges']]
+    items = [{"name": n['node']['title'], "id": n['node']['id'], "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n['node'].get('refCount')), "likes": fmt_num(n['node'].get('likedCount'))} for n in res['data']['generationModels']['edges']]
     return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r)})
 
 @app.route('/api/lora_meta', methods=['POST'])
@@ -159,6 +160,47 @@ def credits():
     r = requests.get(API_URL, params={"operationName":"getMyQuota","variables":"{}","extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_CRE}})}, headers=get_h(request.json.get("token")))
     return jsonify({"credits": r.json()['data']['me']['quotaAmount'], "refreshed_token": check_refresh(r)})
 
+# --- UPDATED REWARD ROUTES FOR RAW JSON FEEDBACK ---
+@app.route('/api/claim_old', methods=['POST'])
+def claim_old():
+    h, logs = get_h(request.json.get("token")), []
+    for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
+        r = requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}, headers=h)
+        logs.append({p: r.text})
+    return jsonify({"status": "success", "raw": logs})
+
+@app.route('/api/claim_new', methods=['POST'])
+def claim_new():
+    h, logs = get_h(request.json.get("token")), []
+    for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
+        r = requests.post(REST_FOLLOW_URL, json={"platform": p}, headers=h)
+        logs.append({p: r.text})
+    return jsonify({"status": "success", "raw": logs})
+
+@app.route('/api/claim_visits', methods=['POST'])
+def claim_visits():
+    h, logs = get_h(request.json.get("token")), []
+    for u in ["https://youtu.be/nFJoUWvs0ko?si=YvjDeXw5hixETOR8", "https://pixai.art/tsubaki-2"]:
+        r = requests.post(REST_VISIT_URL, json={"url": u}, headers=h)
+        logs.append({u: r.text})
+    return jsonify({"status": "success", "raw": logs})
+
+@app.route('/api/claim_mios', methods=['POST'])
+def claim_mios():
+    h, logs = get_h(request.json.get("token")), []
+    r1 = requests.post(API_URL, json={"operationName":"rollAprilFools2026Lottery","variables":{},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_ROLL}}}, headers=h)
+    logs.append({"lottery": r1.text})
+    for i in range(3226, 3235):
+        r_t = requests.post(f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{i}/claim", headers=h, data="")
+        logs.append({f"tier_{i}": r_t.status_code})
+    return jsonify({"status": "success", "raw": logs})
+
+@app.route('/api/enable_18', methods=['POST'])
+def enable_18():
+    h = get_h(request.json.get("token"))
+    r = requests.post(API_URL, json={"operationName":"setPreferences","variables":{"value":{"ageVerificationStatus":"OVER18"}},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_18PLUS}}}, headers=h)
+    return jsonify({"status": "success", "raw": r.text})
+
 @app.route('/api/upload', methods=['POST'])
 def upload():
     t, f = request.form.get("token"), request.files['image'].read()
@@ -168,42 +210,6 @@ def upload():
     ext_id = r1['data']['uploadMedia']['uploadUrl'].split('/')[-1].split('?')[0]
     r3 = requests.post(API_URL, json={"operationName":"uploadMedia","variables":{"input":{"type":"IMAGE","provider":"S3","externalId":ext_id}},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_UPLOAD}}}, headers=h).json()
     return jsonify({"success": True, "mediaId": r3['data']['uploadMedia']['mediaId']})
-
-# --- SPLIT REWARD ROUTES ---
-@app.route('/api/claim_old', methods=['POST'])
-def claim_old():
-    h = get_h(request.json.get("token"))
-    for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
-        requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_REW}}}, headers=h)
-    return jsonify({"status": "success"})
-
-@app.route('/api/claim_new', methods=['POST'])
-def claim_new():
-    h = get_h(request.json.get("token"))
-    for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
-        requests.post(REST_FOLLOW_URL, json={"platform": p}, headers=h)
-    return jsonify({"status": "success"})
-
-@app.route('/api/claim_visits', methods=['POST'])
-def claim_visits():
-    h = get_h(request.json.get("token"))
-    for u in ["https://youtu.be/nFJoUWvs0ko?si=YvjDeXw5hixETOR8", "https://pixai.art/tsubaki-2"]:
-        requests.post(REST_VISIT_URL, json={"url": u}, headers=h)
-    return jsonify({"status": "success"})
-
-@app.route('/api/claim_mios', methods=['POST'])
-def claim_mios():
-    h = get_h(request.json.get("token"))
-    requests.post(API_URL, json={"operationName":"rollAprilFools2026Lottery","variables":{},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_ROLL}}}, headers=h)
-    for i in range(3226, 3235):
-        requests.post(f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{i}/claim", headers=h, data="")
-    return jsonify({"status": "success"})
-
-@app.route('/api/enable_18', methods=['POST'])
-def enable_18():
-    h = get_h(request.json.get("token"))
-    requests.post(API_URL, json={"operationName":"setPreferences","variables":{"value":{"ageVerificationStatus":"OVER18"}},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_18PLUS}}}, headers=h)
-    return jsonify({"status": "success"})
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))

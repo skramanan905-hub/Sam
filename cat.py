@@ -130,7 +130,7 @@ def generate():
         r_init = requests.post(API_URL, json=payload, headers=get_h(token))
         tid = r_init.json()['data']['createGenerationTask']['id']
         while True:
-            time.sleep(30)
+            time.sleep(10)
             r_poll = requests.get(API_URL, params={"operationName":"getTaskById","variables":json.dumps({"id":tid}),"extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_POLL}})}, headers=get_h(token))
             sr = r_poll.json()
             if sr['data']['task']['status'] == "completed":

@@ -53,14 +53,14 @@ active_tasks = {}
 def get_headers(no):
     acc = ACCOUNTS[no]
     return {
-        "user-agent": "MyApp/1.2.3 (android)",
+        "user-agent": "MyApp/1.2.4 (android)",
         "authorization": f"Bearer {acc['token']}",
         "content-type": "application/json",
         "x-request-nonce": str(uuid.uuid4()),
         "x-subscription-id": acc['sub'],
         "x-device-id": acc['device'],
         "x-request-timestamp": str(int(time.time() * 1000)),
-        "x-app-version": "1.2.3",
+        "x-app-version": "1.2.4",
         "x-platform": "android",
         "host": "gameoopadmin.bonixgames.com"
     }
@@ -181,7 +181,7 @@ def get_acc_kb(no):
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
     if str(m.chat.id) != MY_CHAT_ID: return
-    await m.answer("🏦 <b>Manager Active (v1.2.3)</b>", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🏦 ACCOUNT BANK")]], resize_keyboard=True))
+    await m.answer("🏦 <b>Manager Active (v1.2.4)</b>", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🏦 ACCOUNT BANK")]], resize_keyboard=True))
 
 @dp.message(F.text == "🏦 ACCOUNT BANK")
 async def open_bank(m: types.Message):
@@ -231,7 +231,7 @@ async def worker_loop(no, mode):
         finally: active_tasks[no] = None
 
 async def main():
-    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="RUNNING 1.2.3"))
+    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="RUNNING 1.2.4"))
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', PORT).start()
     await dp.start_polling(bot)

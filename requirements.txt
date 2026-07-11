@@ -1,5 +1,8 @@
-pyTelegramBotAPI
-requests
-flask
+Flask
 flask-cors
+requests
 gunicorn
+pyTelegramBotAPI
+aiogram
+httpx[http2]
+aiohttp

@@ -81,7 +81,7 @@ async def fetch_profile(client, no):
     r = await client.get(f"{BASE_URL}/v2/get-home-data", headers=get_headers(no))
     data = r.json().get("data", {})
     user = data.get("user", {})
-    return user # dict with name, email, coins, phone_number
+    return user 
 
 async def get_history_layout(client, no):
     r = await client.get(f"{BASE_URL}/withdrawal-history", headers=get_headers(no))
@@ -89,7 +89,7 @@ async def get_history_layout(client, no):
     if not items: return "❌ No history found."
     
     msg = "📜 <b>FlipDiamond History</b>\n\n"
-    for x in items[:3]:
+    for x in items[:5]:
         code = x.get("redeem_code", {}).get("code", "Wait...")
         pin = x.get("card_no", "N/A")
         msg += (f"━━━━━━━━━━━━━━\n"
@@ -175,7 +175,7 @@ async def worker_loop(no, mode="smart"):
             if mode in ["smart", "play"]: await farm_games(client, no, tag)
             if mode in ["smart", "ads"]:  await farm_ads(client, no, tag)
             if mode in ["smart", "read"]: await farm_reads(client, no, tag)
-            await send_log(f"🏁 {tag} Mode [{mode}] Finished.")
+            await send_log(f"🏁 {tag} Cycle Finished.")
         except Exception as e: await send_log(f"❌ {tag} Error: {str(e)}")
         finally: active_workers[no] = None
 
@@ -183,7 +183,7 @@ async def worker_loop(no, mode="smart"):
 
 def get_main_menu():
     kb = [[KeyboardButton(text="🏦 OPEN ACCOUNT BANK")],
-          [KeyboardButton(text="📝 UPDATE DAILY CODES"), KeyboardButton(text="🧹 WIPE CODES")]]
+          [KeyboardButton(text="📝 UPDATE DAILY CODES")]]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, persistent=True)
 
 def get_bank_kb(page=1):
@@ -206,6 +206,7 @@ def get_acc_kb(no):
         [InlineKeyboardButton(text="💎 GEMS", callback_data=f"gems_{no}"), InlineKeyboardButton(text="🎮 GAMES", callback_data=f"play_{no}")],
         [InlineKeyboardButton(text="📺 ADS", callback_data=f"ads_{no}"), InlineKeyboardButton(text="📖 READ", callback_data=f"read_{no}")],
         [InlineKeyboardButton(text="💳 REDEEM ₹10", callback_data=f"draw_42_{no}"), InlineKeyboardButton(text="💳 REDEEM ₹30", callback_data=f"draw_41_{no}")],
+        [InlineKeyboardButton(text="💳 REDEEM ₹50", callback_data=f"draw_45_{no}"), InlineKeyboardButton(text="💳 REDEEM ₹100", callback_data=f"draw_43_{no}")],
         [InlineKeyboardButton(text="🛑 STOP", callback_data=f"stop_{no}"), InlineKeyboardButton(text="🔙 BACK", callback_data="page_1")]
     ])
 
@@ -238,22 +239,22 @@ async def cb_handler(c: types.CallbackQuery):
             res = await get_history_layout(client, no)
             await c.message.answer(res, parse_mode="HTML")
         elif action == "draw":
-            mid = d[1] # 42 or 41
+            mid = d[1]
             res = await start_withdraw(client, no, mid)
             await c.message.answer(res, parse_mode="HTML")
         elif action in ["smart", "gems", "play", "ads", "read"]:
             if active_workers.get(no): return await c.answer("Already Running!")
             active_workers[no] = asyncio.create_task(worker_loop(no, action))
-            await c.answer("Farming Started 🚀")
+            await c.answer("Started 🚀")
         elif action == "stop":
             if active_workers.get(no): active_workers[no].cancel(); active_workers[no] = None
             await c.answer("Stopped.")
 
-# --- CODE INPUT SYSTEM ---
+# --- CODE INPUT ---
 @dp.message(F.text == "📝 UPDATE DAILY CODES")
 async def set_codes(m: types.Message):
     setup_lock[m.chat.id] = True
-    await m.answer("Send codes (Format: <code>10:G36G4Y</code> one per line):", parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+    await m.answer("Format: <code>ID:CODE</code>", parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
 
 @dp.message()
 async def text_input(m: types.Message):
@@ -266,7 +267,7 @@ async def text_input(m: types.Message):
         await m.answer(f"✅ <b>Codes Saved!</b>", reply_markup=get_main_menu())
 
 async def main():
-    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="OK"))
+    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="RUNNING 12.5.5"))
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', PORT).start()
     await dp.start_polling(bot)

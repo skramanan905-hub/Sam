@@ -57,7 +57,7 @@ setup_lock = {}
 def get_headers(no):
     acc = ACCOUNTS[no]
     return {
-        "user-agent": "MyApp/12.5.4 (android)",
+        "user-agent": "MyApp/12.5.5 (android)",
         "accept-encoding": "gzip",
         "authorization": f"Bearer {acc['token']}",
         "content-type": "application/json",
@@ -66,7 +66,7 @@ def get_headers(no):
         "accept": "application/json",
         "x-device-id": acc['device'],
         "x-request-timestamp": str(int(time.time() * 1000)),
-        "x-app-version": "12.5.4",
+        "x-app-version": "12.5.5",
         "x-platform": "android",
         "host": "flipcontrol.flipdiamond.com"
     }
@@ -214,7 +214,7 @@ def get_acc_kb(no):
 @dp.message(Command("start"))
 async def start(m: types.Message):
     if str(m.chat.id) != MY_CHAT_ID: return
-    await m.answer("💎 <b>FlipDiamond Bank Bot v12.5.4 Active</b>", reply_markup=get_main_menu(), parse_mode="HTML")
+    await m.answer("💎 <b>FlipDiamond Bank Bot v12.5.5 Active</b>", reply_markup=get_main_menu(), parse_mode="HTML")
 
 @dp.message(F.text == "🏦 OPEN ACCOUNT BANK")
 async def open_bank(m: types.Message):

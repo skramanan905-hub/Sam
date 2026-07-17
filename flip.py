@@ -75,54 +75,44 @@ async def send_log(msg):
 
 # -------------------- EARNING MODULES -------------------- #
 
-async def farm_gems_and_supers(client, no, tag):
-    """The Perfect Cycle: Farm Gems -> Unlock -> Claim until daily limit reached"""
+async def farm_supers_infinite(client, no, tag):
+    """Loops Gems -> Supers until server limit (Mapped from f.txt)"""
     while True:
-        # Check status
         r = await client.get(f"{BASE_URL}/super-offers", headers=get_headers(no))
-        res_json = r.json()
+        res_data = r.json()
+        if "limit" in r.text.lower() or not res_data.get("data"):
+            break # Exit loop when daily limit is reached
+            
+        data = res_data["data"]
         
-        # STOP CONDITION: No more offers for today
-        if "limit" in r.text.lower() or not res_json.get("data"):
-            await send_log(f"🏁 {tag}: Daily Super Offers Completed.")
-            break
+        # Branch 1: Earn Reward
+        if data.get("can_earn"):
+            await client.post(f"{BASE_URL}/super-offers/earn", json={"super_offer_id": data["id"]}, headers=get_headers(no))
+            await send_log(f"💰 {tag}: <b>SUPER OFFER {data['id']} DONE!</b>")
+            continue # Re-check status for next offer immediately
             
-        offer = res_json["data"]
-        offer_id = offer["id"]
-        
-        # A. Can we CLAIM immediately?
-        if offer.get("can_earn"):
-            await client.post(f"{BASE_URL}/super-offers/earn", json={"super_offer_id": offer_id}, headers=get_headers(no))
-            await send_log(f"💰 {tag}: <b>SUPER OFFER {offer_id} CLAIMED!</b> (+{offer.get('coins')} Coins)")
-            continue # Re-check status for next offer
-            
-        # B. Can we UNLOCK immediately?
-        if offer.get("can_unlock"):
-            await client.post(f"{BASE_URL}/super-offers/unlock", json={"super_offer_id": offer_id, "timing": "0"}, headers=get_headers(no))
-            continue # Re-check status to claim it
-            
-        # C. Neither? Farm Gems (Stars) using heartbeat logic
+        # Branch 2: Unlock Offer
+        if data.get("can_unlock"):
+            await client.post(f"{BASE_URL}/super-offers/unlock", json={"super_offer_id": data["id"], "timing": "0"}, headers=get_headers(no))
+            continue # Re-check to claim
+
+        # Branch 3: Farm Gems (Fixed 4-6s Gap)
         h = get_headers(no)
-        # v12.5.5 Heartbeat Sync (Per f.txt)
         await asyncio.gather(
             client.post(f"{BASE_URL}/v2/ad-impression", json={"provider":"admob","ad_type":"rewarded"}, headers=h),
             client.post(f"{BASE_URL}/adx/update", json={"adx_item_id":0}, headers=h)
         )
+        await asyncio.sleep(random.randint(4, 6)) # Strict human delay
         
-        # Safe 3-5 sec delay as per user request
-        await asyncio.sleep(random.randint(3, 5))
-        
-        # Star Claim
         claim = await client.post(f"{BASE_URL}/play-games/play", json={"timing": "45000", "is_ad_seen": True}, headers=h)
-        if "limit" in claim.text.lower():
-            await send_log(f"⚠️ {tag}: Star Limit Reached early.")
-            break
-        
-        await asyncio.sleep(1) # Small loop buffer
+        if "limit" in claim.text.lower(): break
+        await asyncio.sleep(1)
 
-async def play_games_logic(client, no, tag):
+async def play_games_updated(client, no, tag):
+    """Standard Games with updated IDs (30-39)"""
     r = await client.get(f"{BASE_URL}/games", headers=get_headers(no))
-    for g in r.json().get("data", []):
+    games = r.json().get("data", [])
+    for g in games:
         if not g.get("claimed"):
             h = get_headers(no)
             await asyncio.gather(
@@ -133,7 +123,7 @@ async def play_games_logic(client, no, tag):
             await client.post(f"{BASE_URL}/games/{g['id']}/play", json={"timing": "182198", "is_ad_seen": True}, headers=h)
     await send_log(f"🎮 {tag}: All Games Finished.")
 
-async def watch_ads_logic(client, no, tag):
+async def watch_ads_updated(client, no, tag):
     r = await client.get(f"{BASE_URL}/watch-ads", headers=get_headers(no))
     for ad in r.json().get("data", []):
         if ad.get("can_watch"):
@@ -143,7 +133,8 @@ async def watch_ads_logic(client, no, tag):
             await client.post(f"{BASE_URL}/watch-ads/watch", json={"watch_ad_id": ad['id'], "timing": "35000", "is_ad_seen": True}, headers=h)
     await send_log(f"📺 {tag}: All Ads Finished.")
 
-async def do_reads(client, no, tag):
+async def do_reads_updated(client, no, tag):
+    count = 0
     while True:
         st = await client.get(f"{BASE_URL}/read-earn/user-status", headers=get_headers(no))
         if not st.json().get("can_complete_more"): break
@@ -153,38 +144,39 @@ async def do_reads(client, no, tag):
             await asyncio.sleep(125)
             p = {"task_id": task["id"], "verify_code": code_database[str(task["id"])], "timing": "130000", "is_ad_seen": True}
             await client.post(f"{BASE_URL}/read-earn/complete-task", json=p, headers=get_headers(no))
+            count += 1
         else: break
-    await send_log(f"📖 {tag}: All Reads Finished.")
+    if count > 0: await send_log(f"📖 {tag}: Finished {count} Reads.")
 
 # -------------------- PROFILE & PAYOUT -------------------- #
 
-async def fetch_profile(client, no):
+async def fetch_acc_data(client, no):
     r = await client.get(f"{BASE_URL}/v2/get-home-data", headers=get_headers(no))
     return r.json().get("data", {}).get("user", {})
 
-async def handle_payout(client, no, mid):
-    user = await fetch_profile(client, no)
-    payload = {"withdrawal_method_id": mid, "payment_details": user['email'], "phone_number": user['phone_number']}
+async def handle_manual_payout(client, no, mid):
+    u = await fetch_acc_data(client, no)
+    payload = {"withdrawal_method_id": mid, "payment_details": u['email'], "phone_number": u['phone_number']}
     r = await client.post(f"{BASE_URL}/withdrawal-requests", json=payload, headers=get_headers(no))
     if r.json().get("status") == "success":
-        return "🎉 <b>Withdrawal Success!</b>\nCode generated. Check HISTORY."
-    return f"❌ <b>Failed:</b> {r.json().get('message')}"
+        return "🎉 <b>Withdrawal Success!</b> Check HISTORY for your code."
+    return f"❌ <b>Error:</b> {r.json().get('message')}"
 
-async def get_history(client, no):
+async def show_formatted_history(client, no):
     r = await client.get(f"{BASE_URL}/withdrawal-history", headers=get_headers(no))
     items = r.json().get("data", [])
-    if not items: return "❌ No codes found."
-    msg = "🎁 <b>PAST REDEEM CODES:</b>\n\n"
+    if not items: return "❌ No history found."
+    msg = "🎁 <b>REDEEM SUCCESS!</b>\n\n"
     for x in items[:3]:
         msg += (f"━━━━━━━━━━━━━━\n"
-                f"💵 {x['withdrawal_method']['title']}\n"
+                f"💳 {x['withdrawal_method']['title']}\n"
                 f"✅ Code: <code>{x.get('redeem_code',{}).get('code','Processing')}</code>\n"
-                f"📌 PIN: <code>{x.get('card_no','N/A')}</code>\n")
+                f"🔑 PIN: <code>{x.get('card_no','N/A')}</code>\n")
     return msg
 
 # -------------------- UI COMPONENTS -------------------- #
 
-def get_bank_kb(page=1):
+def get_account_bank_kb(page=1):
     btns = []
     start = (page-1)*10 + 1
     for i in range(start, min(start+10, 31)):
@@ -195,7 +187,7 @@ def get_bank_kb(page=1):
     rows.append(nav)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
-def get_acc_kb(no):
+def get_action_menu(no):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👤 PROFILE", callback_data=f"prof_{no}"), InlineKeyboardButton(text="📖 HISTORY", callback_data=f"hist_{no}")],
         [InlineKeyboardButton(text="⚡ SMART ALL-IN-ONE", callback_data=f"smart_{no}")],
@@ -212,56 +204,56 @@ async def cb_handler(c: types.CallbackQuery):
     d = c.data.split("_")
     action, no = d[0], d[-1]
     async with httpx.AsyncClient(http2=True, verify=False) as client:
-        if action == "page": await c.message.edit_reply_markup(reply_markup=get_bank_kb(int(no)))
+        if action == "page": await c.message.edit_reply_markup(reply_markup=get_account_bank_kb(int(no)))
         elif action == "view":
-            u = await fetch_profile(client, no)
-            await c.message.edit_text(f"📂 <b>Acc {no}</b>\n👤 {u['name']}\n💰 <b>{u['coins']}</b>", reply_markup=get_acc_kb(no), parse_mode="HTML")
+            u = await fetch_acc_data(client, no)
+            await c.message.edit_text(f"📂 <b>Acc {no}</b>\n👤 {u.get('name')}\n💰 <b>{u.get('coins')}</b>", reply_markup=get_action_menu(no), parse_mode="HTML")
         elif action == "prof":
-            u = await fetch_profile(client, no)
+            u = await fetch_acc_data(client, no)
             await c.message.answer(f"👤 <b>{u['name']}</b>\n📧 {u['email']}\n💰 Coins: {u['coins']}")
-        elif action == "hist": await c.message.answer(await get_history(client, no), parse_mode="HTML")
-        elif action == "wd": await c.message.answer(await handle_payout(client, no, d[1]), parse_mode="HTML")
+        elif action == "hist": await c.message.answer(await show_formatted_history(client, no), parse_mode="HTML")
+        elif action == "wd": await c.message.answer(await handle_manual_payout(client, no, d[1]), parse_mode="HTML")
         elif action in ["smart", "gems", "play"]:
-            if active_workers.get(no): return await c.answer("Running!")
+            if active_workers.get(no): return await c.answer("Worker busy!")
             active_workers[no] = asyncio.create_task(master_worker(no, action))
-            await c.answer("Started!")
+            await c.answer("Cycle Started 🚀")
         elif action == "stop":
             if active_workers.get(no): active_workers[no].cancel(); active_workers[no] = None
-            await c.answer("Stopped.")
+            await c.answer("Task Stopped.")
     await c.answer()
 
 async def master_worker(no, mode):
     tag = f"<b>[Acc {no}]</b>"
     async with httpx.AsyncClient(http2=True, verify=False, timeout=30) as client:
         try:
-            # 1. Supers & Gems (Mandatory First)
+            # 1. Supers & Gems (LOOP FIRST)
             if mode in ["smart", "gems"]: 
-                await farm_gems_and_supers(client, no, tag)
+                await farm_supers_infinite(client, no, tag)
             
-            # 2. Others (Sequential)
+            # 2. Others (FOLLOWING MAP)
             if mode in ["smart", "play"]: 
-                await play_games_logic(client, no, tag)
-                await watch_ads_logic(client, no, tag)
-                await do_reads(client, no, tag)
+                await play_games_updated(client, no, tag)
+                await watch_ads_updated(client, no, tag)
+                await do_reads_updated(client, no, tag)
                 
-            await send_log(f"🏁 {tag}: <b>FULL SEQUENCE FINISHED.</b>")
+            await send_log(f"🏁 {tag}: <b>FULL SEQUENCE DONE.</b>")
         except Exception as e: await send_log(f"❌ {tag} Error: {str(e)}")
         finally: active_workers[no] = None
 
 @dp.message(Command("start"))
 async def start_cmd(m: types.Message):
     if str(m.chat.id) != MY_CHAT_ID: return
-    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🏦 ACCOUNT BANK")], [KeyboardButton(text="📝 UPDATE CODES")]], resize_keyboard=True)
-    await m.answer("💎 <b>Flip Perfect v12.5.5 Active</b>", reply_markup=kb, parse_mode="HTML")
+    kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🏦 ACCOUNT BANK")], [KeyboardButton(text="📝 UPDATE READ CODES")]], resize_keyboard=True)
+    await m.answer("💎 <b>Flip Ultimate v12.5.5 Active</b>", reply_markup=kb, parse_mode="HTML")
 
 @dp.message(F.text == "🏦 ACCOUNT BANK")
 async def open_bank(m: types.Message):
-    await m.answer("Select Account:", reply_markup=get_bank_kb(1))
+    await m.answer("Select Account:", reply_markup=get_account_bank_kb(1))
 
-@dp.message(F.text == "📝 UPDATE CODES")
+@dp.message(F.text == "📝 UPDATE READ CODES")
 async def set_codes(m: types.Message):
     setup_lock[m.chat.id] = True
-    await m.answer("Send codes (ID:CODE):", reply_markup=ReplyKeyboardRemove())
+    await m.answer("Format (ID:CODE):", reply_markup=ReplyKeyboardRemove())
 
 @dp.message()
 async def text_input(m: types.Message):
@@ -274,7 +266,7 @@ async def text_input(m: types.Message):
         await m.answer("✅ Codes Saved!", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🏦 ACCOUNT BANK")]], resize_keyboard=True))
 
 async def main():
-    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="FLIP 12.5.5"))
+    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="RUNNING 12.5.5"))
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', PORT).start()
     await dp.start_polling(bot)

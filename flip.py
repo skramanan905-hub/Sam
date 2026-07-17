@@ -81,22 +81,22 @@ async def fetch_profile(client, no):
     r = await client.get(f"{BASE_URL}/v2/get-home-data", headers=get_headers(no))
     data = r.json().get("data", {})
     user = data.get("user", {})
-    return user 
+    return user # dict with name, email, coins, phone_number
 
 async def get_history_layout(client, no):
     r = await client.get(f"{BASE_URL}/withdrawal-history", headers=get_headers(no))
     items = r.json().get("data", [])
-    if not items: return "❌ No history found."
+    if not items: return "âŒ No history found."
     
-    msg = "📜 <b>FlipDiamond History</b>\n\n"
-    for x in items[:5]:
+    msg = "ðŸ“œ <b>FlipDiamond History</b>\n\n"
+    for x in items[:3]:
         code = x.get("redeem_code", {}).get("code", "Wait...")
         pin = x.get("card_no", "N/A")
-        msg += (f"━━━━━━━━━━━━━━\n"
-                f"💵 {x['withdrawal_method']['title']}\n"
-                f"✅ <b>YOUR CODE:</b>\n<code>{code}</code>\n"
-                f"🔑 <b>Your Gift Code Pin:</b>\n<code>{pin}</code>\n"
-                f"📅 {x['created_at'][:16]}\n")
+        msg += (f"â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n"
+                f"ðŸ’µ {x['withdrawal_method']['title']}\n"
+                f"âœ… <b>YOUR CODE:</b>\n<code>{code}</code>\n"
+                f"ðŸ”‘ <b>Your Gift Code Pin:</b>\n<code>{pin}</code>\n"
+                f"ðŸ“… {x['created_at'][:16]}\n")
     return msg
 
 async def start_withdraw(client, no, method_id):
@@ -108,8 +108,8 @@ async def start_withdraw(client, no, method_id):
     }
     r = await client.post(f"{BASE_URL}/withdrawal-requests", json=payload, headers=get_headers(no))
     if r.json().get("status") == "success":
-        return "🎉 <b>Success!</b> Gift code generated. Check HISTORY."
-    return f"❌ <b>Error:</b> {r.json().get('message')}"
+        return "ðŸŽ‰ <b>Success!</b> Gift code generated. Check HISTORY."
+    return f"âŒ <b>Error:</b> {r.json().get('message')}"
 
 # -------------------- EARNING MODULES -------------------- #
 
@@ -175,39 +175,38 @@ async def worker_loop(no, mode="smart"):
             if mode in ["smart", "play"]: await farm_games(client, no, tag)
             if mode in ["smart", "ads"]:  await farm_ads(client, no, tag)
             if mode in ["smart", "read"]: await farm_reads(client, no, tag)
-            await send_log(f"🏁 {tag} Cycle Finished.")
-        except Exception as e: await send_log(f"❌ {tag} Error: {str(e)}")
+            await send_log(f"ðŸ {tag} Mode [{mode}] Finished.")
+        except Exception as e: await send_log(f"âŒ {tag} Error: {str(e)}")
         finally: active_workers[no] = None
 
 # -------------------- UI COMPONENTS -------------------- #
 
 def get_main_menu():
-    kb = [[KeyboardButton(text="🏦 OPEN ACCOUNT BANK")],
-          [KeyboardButton(text="📝 UPDATE DAILY CODES")]]
+    kb = [[KeyboardButton(text="ðŸ¦ OPEN ACCOUNT BANK")],
+          [KeyboardButton(text="ðŸ“ UPDATE DAILY CODES"), KeyboardButton(text="ðŸ§¹ WIPE CODES")]]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, persistent=True)
 
 def get_bank_kb(page=1):
     btns = []
     start = (page-1)*10 + 1
     for i in range(start, start+10):
-        s = "🟢" if str(i) in active_workers and active_workers[str(i)] else "🔴"
+        s = "ðŸŸ¢" if str(i) in active_workers and active_workers[str(i)] else "ðŸ”´"
         btns.append(InlineKeyboardButton(text=f"{s} Acc {i}", callback_data=f"view_{i}"))
     rows = [btns[i:i+2] for i in range(0, len(btns), 2)]
     nav = []
-    if page > 1: nav.append(InlineKeyboardButton(text="⬅️", callback_data=f"page_{page-1}"))
-    if page < 3: nav.append(InlineKeyboardButton(text="➡️", callback_data=f"page_{page+1}"))
+    if page > 1: nav.append(InlineKeyboardButton(text="â¬…ï¸", callback_data=f"page_{page-1}"))
+    if page < 3: nav.append(InlineKeyboardButton(text="âž¡ï¸", callback_data=f"page_{page+1}"))
     rows.append(nav)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 def get_acc_kb(no):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="👤 PROFILE", callback_data=f"prof_{no}"), InlineKeyboardButton(text="📖 HISTORY", callback_data=f"hist_{no}")],
-        [InlineKeyboardButton(text="⚡ SMART FARM", callback_data=f"smart_{no}")],
-        [InlineKeyboardButton(text="💎 GEMS", callback_data=f"gems_{no}"), InlineKeyboardButton(text="🎮 GAMES", callback_data=f"play_{no}")],
-        [InlineKeyboardButton(text="📺 ADS", callback_data=f"ads_{no}"), InlineKeyboardButton(text="📖 READ", callback_data=f"read_{no}")],
-        [InlineKeyboardButton(text="💳 REDEEM ₹10", callback_data=f"draw_42_{no}"), InlineKeyboardButton(text="💳 REDEEM ₹30", callback_data=f"draw_41_{no}")],
-        [InlineKeyboardButton(text="💳 REDEEM ₹50", callback_data=f"draw_45_{no}"), InlineKeyboardButton(text="💳 REDEEM ₹100", callback_data=f"draw_43_{no}")],
-        [InlineKeyboardButton(text="🛑 STOP", callback_data=f"stop_{no}"), InlineKeyboardButton(text="🔙 BACK", callback_data="page_1")]
+        [InlineKeyboardButton(text="ðŸ‘¤ PROFILE", callback_data=f"prof_{no}"), InlineKeyboardButton(text="ðŸ“– HISTORY", callback_data=f"hist_{no}")],
+        [InlineKeyboardButton(text="âš¡ SMART FARM", callback_data=f"smart_{no}")],
+        [InlineKeyboardButton(text="ðŸ’Ž GEMS", callback_data=f"gems_{no}"), InlineKeyboardButton(text="ðŸŽ® GAMES", callback_data=f"play_{no}")],
+        [InlineKeyboardButton(text="ðŸ“º ADS", callback_data=f"ads_{no}"), InlineKeyboardButton(text="ðŸ“– READ", callback_data=f"read_{no}")],
+        [InlineKeyboardButton(text="ðŸ’³ REDEEM â‚¹10", callback_data=f"draw_42_{no}"), InlineKeyboardButton(text="ðŸ’³ REDEEM â‚¹30", callback_data=f"draw_41_{no}")],
+        [InlineKeyboardButton(text="ðŸ›‘ STOP", callback_data=f"stop_{no}"), InlineKeyboardButton(text="ðŸ”™ BACK", callback_data="page_1")]
     ])
 
 # -------------------- HANDLERS -------------------- #
@@ -215,9 +214,9 @@ def get_acc_kb(no):
 @dp.message(Command("start"))
 async def start(m: types.Message):
     if str(m.chat.id) != MY_CHAT_ID: return
-    await m.answer("💎 <b>FlipDiamond Bank Bot v12.5.5 Active</b>", reply_markup=get_main_menu(), parse_mode="HTML")
+    await m.answer("ðŸ’Ž <b>FlipDiamond Bank Bot v12.5.5 Active</b>", reply_markup=get_main_menu(), parse_mode="HTML")
 
-@dp.message(F.text == "🏦 OPEN ACCOUNT BANK")
+@dp.message(F.text == "ðŸ¦ OPEN ACCOUNT BANK")
 async def open_bank(m: types.Message):
     await m.answer("Select Account:", reply_markup=get_bank_kb(page=1))
 
@@ -230,31 +229,31 @@ async def cb_handler(c: types.CallbackQuery):
         if action == "page": await c.message.edit_reply_markup(reply_markup=get_bank_kb(int(no)))
         elif action == "view":
             u = await fetch_profile(client, no)
-            msg = f"📂 <b>Account {no}</b>\n👤 Name: {u['name']}\n💰 Coins: <b>{u['coins']}</b>"
+            msg = f"ðŸ“‚ <b>Account {no}</b>\nðŸ‘¤ Name: {u['name']}\nðŸ’° Coins: <b>{u['coins']}</b>"
             await c.message.edit_text(msg, reply_markup=get_acc_kb(no), parse_mode="HTML")
         elif action == "prof":
             u = await fetch_profile(client, no)
-            await c.message.answer(f"👤 <b>{u['name']}</b>\n📧 {u['email']}\n💰 Coins: {u['coins']}", parse_mode="HTML")
+            await c.message.answer(f"ðŸ‘¤ <b>{u['name']}</b>\nðŸ“§ {u['email']}\nðŸ’° Coins: {u['coins']}", parse_mode="HTML")
         elif action == "hist":
             res = await get_history_layout(client, no)
             await c.message.answer(res, parse_mode="HTML")
         elif action == "draw":
-            mid = d[1]
+            mid = d[1] # 42 or 41
             res = await start_withdraw(client, no, mid)
             await c.message.answer(res, parse_mode="HTML")
         elif action in ["smart", "gems", "play", "ads", "read"]:
             if active_workers.get(no): return await c.answer("Already Running!")
             active_workers[no] = asyncio.create_task(worker_loop(no, action))
-            await c.answer("Started 🚀")
+            await c.answer("Farming Started ðŸš€")
         elif action == "stop":
             if active_workers.get(no): active_workers[no].cancel(); active_workers[no] = None
             await c.answer("Stopped.")
 
-# --- CODE INPUT ---
-@dp.message(F.text == "📝 UPDATE DAILY CODES")
+# --- CODE INPUT SYSTEM ---
+@dp.message(F.text == "ðŸ“ UPDATE DAILY CODES")
 async def set_codes(m: types.Message):
     setup_lock[m.chat.id] = True
-    await m.answer("Format: <code>ID:CODE</code>", parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
+    await m.answer("Send codes (Format: <code>10:G36G4Y</code> one per line):", parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
 
 @dp.message()
 async def text_input(m: types.Message):
@@ -264,10 +263,10 @@ async def text_input(m: types.Message):
                 tid, tcode = line.split(":")
                 code_database[tid.strip()] = tcode.strip()
         del setup_lock[m.chat.id]
-        await m.answer(f"✅ <b>Codes Saved!</b>", reply_markup=get_main_menu())
+        await m.answer(f"âœ… <b>Codes Saved!</b>", reply_markup=get_main_menu())
 
 async def main():
-    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="RUNNING 12.5.5"))
+    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="OK"))
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', PORT).start()
     await dp.start_polling(bot)

@@ -57,7 +57,7 @@ setup_lock = {}
 def get_headers(no):
     acc = ACCOUNTS[no]
     return {
-        "user-agent": "MyApp/12.5.5 (android)",
+        "user-agent": "MyApp/12.5.7 (android)",
         "accept-encoding": "gzip",
         "authorization": f"Bearer {acc['token']}",
         "content-type": "application/json",
@@ -66,7 +66,7 @@ def get_headers(no):
         "accept": "application/json",
         "x-device-id": acc['device'],
         "x-request-timestamp": str(int(time.time() * 1000)),
-        "x-app-version": "12.5.5",
+        "x-app-version": "12.5.7",
         "x-platform": "android",
         "host": "flipcontrol.flipdiamond.com"
     }
@@ -75,7 +75,7 @@ async def send_log(msg):
     try: await bot.send_message(MY_CHAT_ID, msg, parse_mode="HTML")
     except: pass
 
-# -------------------- MISSION MODULES (NEW v12.5.5 DATA) -------------------- #
+# -------------------- MISSION MODULES (NEW v12.5.7 DATA) -------------------- #
 
 async def farm_gems_and_supers(client, no, tag):
     """Loops Super Offers + Gems (6s delay) until Daily Limit"""
@@ -122,7 +122,7 @@ async def farm_games(client, no, tag):
     for g in r.json().get("data", []):
         if not g.get("claimed"):
             h = get_headers(no)
-            # v12.5.5 Game Heartbeat
+            # v12.5.7 Game Heartbeat
             await asyncio.gather(
                 client.post(f"{BASE_URL}/v2/ad-impression", json={"provider":"digital_turbine","ad_type":"rewarded"}, headers=h),
                 client.post(f"{BASE_URL}/track/dt-ads", json={"dt_item_id":0}, headers=h)
@@ -241,7 +241,7 @@ async def master_worker(no, mode):
 async def start_cmd(m: types.Message):
     if str(m.chat.id) != MY_CHAT_ID: return
     kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🏦 OPEN BANK")], [KeyboardButton(text="📝 UPDATE CODES")]], resize_keyboard=True)
-    await m.answer("💎 <b>Flip Diamond Perfect v12.5.5 Active</b>", reply_markup=kb, parse_mode="HTML")
+    await m.answer("💎 <b>Flip Diamond Perfect v12.5.7 Active</b>", reply_markup=kb, parse_mode="HTML")
 
 @dp.message(F.text == "🏦 OPEN BANK")
 async def open_bank(m: types.Message):
@@ -263,7 +263,7 @@ async def text_input(m: types.Message):
         await m.answer("✅ Codes Saved!", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🏦 OPEN BANK")]], resize_keyboard=True))
 
 async def main():
-    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="RUNNING 12.5.5"))
+    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="RUNNING 12.5.7"))
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', PORT).start()
     await dp.start_polling(bot)

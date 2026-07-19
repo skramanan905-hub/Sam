@@ -55,7 +55,7 @@ setup_lock = {}
 def get_headers(no):
     acc = ACCOUNTS[no]
     return {
-        "user-agent": "MyApp/12.5.5 (android)",
+        "user-agent": "MyApp/12.5.7 (android)",
         "accept-encoding": "gzip",
         "authorization": f"Bearer {acc['token']}",
         "content-type": "application/json",
@@ -64,7 +64,7 @@ def get_headers(no):
         "accept": "application/json",
         "x-device-id": acc['device'],
         "x-request-timestamp": str(int(time.time() * 1000)),
-        "x-app-version": "12.5.5",
+        "x-app-version": "12.5.7",
         "x-platform": "android",
         "host": "flipcontrol.flipdiamond.com"
     }
@@ -76,7 +76,7 @@ async def send_log(msg):
 # -------------------- EARNING MODULES -------------------- #
 
 async def farm_gems_and_supers(client, no, tag):
-    """Loops until all 5 Super Offers are done. Fixed v12.5.5 Status check."""
+    """Loops until all 5 Super Offers are done. Fixed v12.5.7 Status check."""
     while True:
         r = await client.get(f"{BASE_URL}/super-offers", headers=get_headers(no))
         res_json = r.json()
@@ -243,7 +243,7 @@ async def master_worker(no, mode):
 async def start_cmd(m: types.Message):
     if str(m.chat.id) != MY_CHAT_ID: return
     kb = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🏦 ACCOUNT BANK")], [KeyboardButton(text="📝 UPDATE DAILY CODES")]], resize_keyboard=True)
-    await m.answer("💎 <b>Flip Ultimate v12.5.5 Active</b>", reply_markup=kb, parse_mode="HTML")
+    await m.answer("💎 <b>Flip Ultimate v12.5.7 Active</b>", reply_markup=kb, parse_mode="HTML")
 
 @dp.message(F.text == "🏦 ACCOUNT BANK")
 async def open_bank(m: types.Message):

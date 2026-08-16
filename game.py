@@ -10,7 +10,7 @@ MY_CHAT_ID = "1827265590"
 BASE_URL = "https://gameoopadmin.bonixgames.com/api"
 PORT = int(os.getenv("PORT", 10000))
 
-# ==================== THE 30-ACCOUNT ID BANK ====================
+# ==================== THE 30-ACCOUNT ID BANK (STRICT) ====================
 ACCOUNTS = {
     "1": {"device": "c50b8e111c711fa2", "sub": "1734a8f7-8579-4131-89ee-01ead3a69f59", "token": "94242|EAwjg3IjN0wjX6zASG9HP3Dki3neneAnkNm0r9F05cabab7d"},
     "2": {"device": "8c608ccb6861f205", "sub": "2e5f8fc6-b2fd-43f2-b4dc-fd86a38603cb", "token": "94144|9iqOU9PPgu4FonsBmcqDSdCB6zmAFt12gnIts2dH1023e519"},
@@ -69,7 +69,7 @@ async def send_log(msg):
     try: await bot.send_message(MY_CHAT_ID, msg, parse_mode="HTML")
     except: pass
 
-# -------------------- EARNING MODULES (RESTORED) -------------------- #
+# -------------------- MISSION MODULES -------------------- #
 
 async def farm_gems(client, no, tag):
     while True:
@@ -130,14 +130,22 @@ async def get_history_layout(client, no):
     history = r.json().get("data", [])
     if not history: return "❌ No history found."
     
-    msg = "📜 <b>Withdrawal History</b>\n\n"
-    for item in history[:3]:
-        code = item.get("redeem_code", {}).get("code", "Wait...")
-        pin = item.get("card_no", "N/A")
+    msg = "📜 <b>Game Op History (All)</b>\n\n"
+    for item in history[:8]:
+        status = item.get("status", "unknown").lower()
+        # Status UI mapping
+        s_icon = "⏳" if status == "pending" else "✅" if status == "paid" else "❌"
+        s_text = status.upper()
+        
+        raw_code = item.get("redeem_code")
+        code = raw_code.get("code") if raw_code else "Processing..."
+        pin = item.get("card_no") if item.get("card_no") else "N/A"
+        
         msg += (f"━━━━━━━━━━━━━━\n"
+                f"{s_icon} Status: <b>{s_text}</b>\n"
                 f"💵 {item['withdrawal_method']['title']}\n"
-                f"✅ <b>YOUR CODE:</b>\n<code>{code}</code>\n"
-                f"🔑 <b>Your Gift Code Pin:</b>\n<code>{pin}</code>\n"
+                f"🎫 Code: <code>{code}</code>\n"
+                f"🔑 Pin: <code>{pin}</code>\n"
                 f"📅 {item['created_at'][:16]}\n")
     return msg
 
@@ -150,7 +158,7 @@ async def start_withdraw(client, no, method_id):
     }
     r = await client.post(f"{BASE_URL}/withdrawal-requests", json=payload, headers=get_headers(no))
     if r.json().get("status") == "success":
-        return "🎉 <b>Success!</b> Gift code generated. Check History."
+        return "🎉 <b>Success!</b> Withdrawal created. Check History."
     return f"❌ <b>Error:</b> {r.json().get('message')}"
 
 # -------------------- UI & HANDLERS -------------------- #
@@ -174,7 +182,8 @@ def get_acc_kb(no):
         [InlineKeyboardButton(text="⚡ SMART ALL-IN-ONE", callback_data=f"smart_{no}")],
         [InlineKeyboardButton(text="💎 GEMS", callback_data=f"gems_{no}"), InlineKeyboardButton(text="🎮 GAMES", callback_data=f"play_{no}")],
         [InlineKeyboardButton(text="📺 ADS", callback_data=f"ads_{no}"), InlineKeyboardButton(text="📖 READ", callback_data=f"read_{no}")],
-        [InlineKeyboardButton(text="💳 REDEEM ₹10", callback_data=f"draw_7_{no}"), InlineKeyboardButton(text="💳 REDEEM ₹20", callback_data=f"draw_8_{no}")],
+        [InlineKeyboardButton(text="💳 ₹10", callback_data=f"draw_7_{no}"), InlineKeyboardButton(text="💳 ₹20", callback_data=f"draw_8_{no}")],
+        [InlineKeyboardButton(text="💳 ₹50", callback_data=f"draw_9_{no}"), InlineKeyboardButton(text="💳 ₹100", callback_data=f"draw_10_{no}")],
         [InlineKeyboardButton(text="🛑 STOP", callback_data=f"stop_{no}"), InlineKeyboardButton(text="🔙 BACK", callback_data="page_1")]
     ])
 
@@ -224,7 +233,7 @@ async def worker_loop(no, mode):
         try:
             if mode in ["smart", "gems"]: await farm_gems(client, no, tag)
             if mode in ["smart", "play"]: await play_games(client, no, tag)
-            if mode in ["smart", "ads"]:  await watch_ads(client, no, tag)
+            if mode in ["smart", "ads"]:  await farm_ads(client, no, tag)
             if mode in ["smart", "read"]: await do_reads(client, no, tag)
             await send_log(f"🏁 {tag} Finished.")
         except Exception as e: await send_log(f"❌ {tag} Error: {str(e)}")

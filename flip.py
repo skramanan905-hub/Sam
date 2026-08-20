@@ -62,7 +62,7 @@ class Form(StatesGroup):
 def get_headers(no):
     acc = ACCOUNTS[no]
     return {
-        "user-agent": "MyApp/12.5.8 (android)",
+        "user-agent": "MyApp/12.5.9 (android)",
         "accept-encoding": "gzip",
         "authorization": f"Bearer {acc['token']}",
         "content-type": "application/json",
@@ -71,7 +71,7 @@ def get_headers(no):
         "accept": "application/json",
         "x-device-id": acc['device'],
         "x-request-timestamp": str(int(time.time() * 1000)),
-        "x-app-version": "12.5.8",
+        "x-app-version": "12.5.9",
         "x-platform": "android",
         "host": "flipcontrol.flipdiamond.com"
     }
@@ -185,11 +185,11 @@ async def farm_reads(client, no, tag):
 
 async def fetch_manual_link(bearer, device, sub):
     headers = {
-        "user-agent": "MyApp/12.5.8 (android)",
+        "user-agent": "MyApp/12.5.9 (android)",
         "authorization": f"Bearer {bearer}",
         "x-subscription-id": sub,
         "x-device-id": device,
-        "x-app-version": "12.5.8",
+        "x-app-version": "12.5.9",
         "host": "flipcontrol.flipdiamond.com"
     }
     async with httpx.AsyncClient(verify=False) as client:
@@ -236,7 +236,7 @@ def get_acc_kb(no):
 @dp.message(Command("start"))
 async def start(m: types.Message):
     if str(m.chat.id) != MY_CHAT_ID: return
-    await m.answer("💎 <b>FlipDiamond Bot v12.5.8 Active</b>\n\n• Withdrawal History Fixed\n• Read alerts added\n• Manual fetcher added", reply_markup=get_main_menu(), parse_mode="HTML")
+    await m.answer("💎 <b>FlipDiamond Bot v12.5.9 Active</b>\n\n• Withdrawal History Fixed\n• Read alerts added\n• Manual fetcher added", reply_markup=get_main_menu(), parse_mode="HTML")
 
 @dp.message(F.text == "🏦 OPEN ACCOUNT BANK")
 async def open_bank(m: types.Message):
@@ -316,7 +316,7 @@ async def text_input(m: types.Message):
         await m.answer(f"✅ <b>Codes Saved!</b>", reply_markup=get_main_menu())
 
 async def main():
-    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="RUNNING 12.5.8"))
+    app = web.Application(); app.router.add_get("/", lambda r: web.Response(text="RUNNING 12.5.9"))
     runner = web.AppRunner(app); await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', PORT).start()
     await dp.start_polling(bot)

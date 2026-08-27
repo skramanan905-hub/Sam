@@ -12,7 +12,7 @@ DAILY_URL = "https://api.pixai.art/v2/claim/pixai-daily-credits"
 REST_FOLLOW_URL = "https://api.pixai.art/v2/quest-v2/report-social-follow"
 REST_VISIT_URL = "https://api.pixai.art/v2/quest-v2/report-visit"
 
-# UPDATED HASHES FROM YOUR AUGUST 27, 2026 LOGS
+# UPDATED HASHES FROM AUGUST 27, 2026 LOGS
 H_GEN    = "7662bf96848c0cd1e03cafc5a6b61785481a55a1c92faec3a248da9195bf9d25"
 H_POLL   = "2526f64c73c59fcfeff938b0f4a8b3b610f2294bc6eb6b6b281aa671ac81a08e"
 H_LORA   = "4e1614f7373d676cb8ec17975796188369ce321a6e78336558ec50f0c2317840"
@@ -59,66 +59,71 @@ def index(): return "Active"
 @app.route('/api/restart', methods=['POST'])
 def restart(): os._exit(1)
 
+# FIXED SEARCH MODELS Logic (Matched to DeepSeek working code)
 @app.route('/api/search_models', methods=['POST'])
 def search_models():
     d = request.json
-    v = {"first": 30, "types": ["ANY_MODEL"], "feed": "meilisearch", "keyword": d.get("keyword"), "after": d.get("cursor")}
-    ext = {"clientLibrary": {"name": "@apollo/client", "version": "4.1.4"}, "persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}}
-    
-    # PER YOUR LOGS: Search is now a GET request
-    params = {"operationName": "listGenerationModels", "variables": json.dumps(v), "extensions": json.dumps(ext)}
-    r = requests.get(API_URL, params=params, headers=get_h(d.get("token")))
+    v = {
+        "first": 30, 
+        "types": ["ANY_MODEL"], 
+        "loraBaseModelTypes": ["SDXL_MODEL"],
+        "feed": d.get("sort", "meilisearch"), 
+        "keyword": d.get("keyword"), 
+        "after": d.get("cursor")
+    }
+    payload = {
+        "operationName": "listGenerationModels",
+        "variables": v,
+        "extensions": {"persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}}
+    }
+    r = requests.post(API_URL, json=payload, headers=get_h(d.get("token")))
     res = r.json()
-    
     items = []
     if 'data' in res and res['data'].get('generationModels'):
         for e in res['data']['generationModels']['edges']:
             n = e['node']
             m_id = n['latestAvailableVersion']['id'] if n.get('latestAvailableVersion') else n['id']
             items.append({"name": n['title'], "id": m_id, "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n.get('refCount')), "likes": fmt_num(n.get('likedCount')), "type": fmt_type(n.get('type'))})
-    
-    return jsonify({
-        "results": items, 
-        "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if 'data' in res and res['data']['generationModels']['pageInfo']['hasNextPage'] else None, 
-        "refreshed_token": check_refresh(r),
-        "debug": {"url": r.url, "response": res} # RAW DEBUG DATA
-    })
+    return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if 'data' in res and res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r), "raw_debug": res})
 
+# FIXED SEARCH LORA Logic (Matched to DeepSeek working code)
 @app.route('/api/search', methods=['POST'])
 def search_loras():
     d = request.json
-    v = {"first": 30, "types": ["ANY_LORA"], "feed": "meilisearch", "keyword": d.get("keyword"), "after": d.get("cursor")}
-    ext = {"clientLibrary": {"name": "@apollo/client", "version": "4.1.4"}, "persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}}
-    
-    params = {"operationName": "listGenerationModels", "variables": json.dumps(v), "extensions": json.dumps(ext)}
-    r = requests.get(API_URL, params=params, headers=get_h(d.get("token")))
+    v = {
+        "first": 30, 
+        "types": ["ANY_LORA"], 
+        "loraBaseModelTypes": ["SDXL_MODEL"],
+        "feed": d.get("sort", "meilisearch"), 
+        "keyword": d.get("keyword"), 
+        "after": d.get("cursor")
+    }
+    payload = {
+        "operationName": "listGenerationModels",
+        "variables": v,
+        "extensions": {"persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}}
+    }
+    r = requests.post(API_URL, json=payload, headers=get_h(d.get("token")))
     res = r.json()
-    
     items = []
     if 'data' in res and res['data'].get('generationModels'):
         for e in res['data']['generationModels']['edges']:
             n = e['node']
             items.append({ "name": n['title'], "id": n['id'], "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n.get('refCount')), "likes": fmt_num(n.get('likedCount'))})
-    
-    return jsonify({
-        "results": items, 
-        "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if 'data' in res and res['data']['generationModels']['pageInfo']['hasNextPage'] else None, 
-        "refreshed_token": check_refresh(r),
-        "debug": {"url": r.url, "response": res} # RAW DEBUG DATA
-    })
+    return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if 'data' in res and res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r), "raw_debug": res})
 
 @app.route('/api/lora_meta', methods=['POST'])
 def lora_meta():
     d = request.json
-    # Per logs: getGenerationModel is also GET
+    # Per logs: Metadata is GET
     v = {"id": d.get("id")}
     ext = {"persistedQuery": {"version": 1, "sha256Hash": "cd94c1ebc6c2ee3bb3c10e1cb7c80cbd05c4470094b10e48a539aaaf36879696"}}
     r = requests.get(API_URL, params={"operationName": "getGenerationModel", "variables": json.dumps(v), "extensions": json.dumps(ext)}, headers=get_h(d.get("token")))
     res = r.json()
     if 'errors' in res: return jsonify({"status": "error", "raw": res})
     data = res['data']['generationModel']
-    v_data = data['latestAvailableVersion']
-    return jsonify({"v_id": v_data['id'], "trigger": v_data['extra'].get('triggerWords', ""), "name": data['title'], "id": d.get("id"), "refreshed_token": check_refresh(r)})
+    v_info = data['latestAvailableVersion']
+    return jsonify({"v_id": v_info['id'], "trigger": v_info['extra'].get('triggerWords', ""), "name": data['title'], "id": d.get("id"), "refreshed_token": check_refresh(r)})
 
 @app.route('/api/generate', methods=['POST'])
 def generate():
@@ -161,7 +166,7 @@ def generate():
     r_init = requests.post(API_URL, json=payload, headers=get_h(token))
     res_raw = r_init.json()
     if 'errors' in res_raw: return jsonify({"status": "error", "raw": res_raw})
-    return jsonify({"status": "started", "tid": res_raw['data']['createGenerationTask']['id'], "raw": res_raw})
+    return jsonify({"status": "started", "tid": res_raw['data']['createGenerationTask']['id'], "req_log": payload, "raw": res_raw})
 
 @app.route('/api/check_task', methods=['POST'])
 def check_task():
@@ -176,8 +181,7 @@ def check_task():
 @app.route('/api/tasks', methods=['POST'])
 def tasks():
     d = request.json
-    vars = {"last": 30, "before": d.get("cursor")}
-    r = requests.get(API_URL, params={"operationName": "listMyTasksTyped", "variables": json.dumps(vars), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_LIST}})}, headers=get_h(d.get("token")))
+    r = requests.get(API_URL, params={"operationName": "listMyTasksTyped", "variables": json.dumps({"last": 30, "before": d.get("cursor")}), "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": H_LIST}})}, headers=get_h(d.get("token")))
     resp_json = r.json()
     task_data = []
     if 'data' in resp_json:

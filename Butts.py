@@ -23,7 +23,7 @@ H_UPLOAD = "dd71971acde11807d01862ff1a94657479f7e833af75eac850aa2de0a14fa1fa"
 H_COST   = "50567e9680327f27a692e76f62b1b3699b24467f3747b0e14d3345d2e3077395"
 H_18PLUS = "fb22173aa2a43ff08be4221a17094a1445cb212e1b1970a1cee8c37e98d38304"
 H_REW    = "923002464a8e816706394061c18316cd2d14f5f025dbd1d08020e44cd8a23546"
-# ✅ FIXED: Updated LoRA search hash from HAR log
+# ✅ FIXED: Updated LoRA search hash from your HAR log
 H_MODEL_SEARCH = "b7a2d663bc0381dd6eb26f8c68f702cb928bea720982f6f5553ea1629a8e871d"
 
 Q_SEARCH = """query listGenerationModels($keyword: String, $feed: String, $types: [GenerationModelType!], $first: Int, $after: String) {
@@ -90,7 +90,7 @@ def search_models():
         items.append({"name": n['title'], "id": m_id, "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n.get('refCount')), "likes": fmt_num(n.get('likedCount')), "type": fmt_type(n.get('type'))})
     return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r)})
 
-# ✅ FIXED: Updated LoRA search - EXACTLY like your working Termux test
+# ✅ FIXED: Updated LoRA search - exactly like your working Termux test
 @app.route('/api/search', methods=['POST'])
 def search_loras():
     d = request.json

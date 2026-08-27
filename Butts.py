@@ -6,36 +6,44 @@ from datetime import datetime
 app = Flask(__name__)
 CORS(app)
 
-# ================= MASTER CONFIGURATION =================
+# ================= MASTER CONFIGURATION (UPDATED FROM YOUR genrate.txt) =================
 API_URL = "https://api.pixai.art/graphql"
 DAILY_URL = "https://api.pixai.art/v2/claim/pixai-daily-credits"
 REST_FOLLOW_URL = "https://api.pixai.art/v2/quest-v2/report-social-follow"
 REST_VISIT_URL = "https://api.pixai.art/v2/quest-v2/report-visit"
 
-# HASHES
-H_GEN    = "7662bf96848c0cd1e03cafc5a6b61785481a55a1c92faec3a248da9195bf9d25"
+# UPDATED HASHES FROM MAY 24 LOGS
+H_GEN    = "7a92ee49fb71cc301ef72fac2537cdc2d2ca78fbd520ae4d2c5b3900e7108c5a"
 H_POLL   = "b3b4495fe4f54a1db80618d91c31ddccaac0253fa40518ed045cd7ae2806e642"
-H_LIST   = "cc067203ddd0846c19d9e247d837c32da498247ec252fe30828434f2f136f53d"
-H_CRE    = "9356b42a4ff6e987347a1f1ee3de7aba4bd103b1cdbfbbc4c5c5fcf52767ad66"
-H_UPLOAD = "dd71971acde11807d01862ff1a94657479f7e833af75eac850aa2de0a14fa1fa"
-H_18PLUS = "fb22173aa2a43ff08be4221a17094a1445cb212e1b1970a1cee8c37e98d38304"
+H_LORA   = "4e1614f7373d676cb8ec17975796188369ce321a6e78336558ec50f0c2317840"
 H_ROLL   = "f0778d88963cc4e40749a8ecd9d510808b4a14cd63fac498e7763e6d5d780e5e"
+H_CRE    = "9356b42a4ff6e987347a1f1ee3de7aba4bd103b1cdbfbbc4c5c5fcf52767ad66"
+H_LIST   = "cc067203ddd0846c19d9e247d837c32da498247ec252fe30828434f2f136f53d"
+H_UPLOAD = "dd71971acde11807d01862ff1a94657479f7e833af75eac850aa2de0a14fa1fa"
+H_COST   = "50567e9680327f27a692e76f62b1b3699b24467f3747b0e14d3345d2e3077395"
+H_18PLUS = "fb22173aa2a43ff08be4221a17094a1445cb212e1b1970a1cee8c37e98d38304"
+H_REW    = "923002464a8e816706394061c18316cd2d14f5f025dbd1d08020e44cd8a23546"
+H_MODEL_SEARCH = "1658f8e716184e95d3177d20fad189d8f7b250fb30e8401496ed0aaf34e4ad83"
 
-# NEW SEARCH DATA HASH
-H_MODEL_SEARCH = "b7a2d663bc0381dd6eb26f8c68f702cb928bea720982f6f5553ea1629a8e871d"
+Q_SEARCH = """query listGenerationModels($keyword: String, $feed: String, $types: [GenerationModelType!], $first: Int, $after: String) {
+  generationModels(keyword: $keyword, feed: $feed, types: $types, first: $first, after: $after) {
+    edges {
+      node {
+        id title type refCount likedCount
+        media { urls { url variant } }
+        latestAvailableVersion { id }
+      }
+    }
+    pageInfo { endCursor hasNextPage }
+  }
+}"""
 
 Q_METADATA = """query getGenerationModel($id: ID!) {
   generationModel(id: $id) { id title latestAvailableVersion { id extra } }
 }"""
 
 def get_h(t): 
-    return {
-        "Authorization": f"Bearer {t.strip()}", 
-        "Content-Type": "application/json", 
-        "x-browser-id": "56e77fe10bfcfb337ef2d43bc0df330f", 
-        "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36",
-        "Accept": "application/graphql-response+json,application/json;q=0.9"
-    }
+    return {"Authorization": f"Bearer {t.strip()}", "Content-Type": "application/json", "x-browser-id": "08df9bc9358ad97ebfe0ac86284587e5", "User-Agent": "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36"}
 
 def clean_txt(text):
     if not text or text == "null": return "None"
@@ -54,6 +62,10 @@ def fmt_num(num):
     if num >= 1000: return f"{num/1000:.2f}k"
     return str(num)
 
+def fmt_type(t):
+    mapping = {"SDXL_MODEL": "PixAI XL", "DIT7B_MODEL": "PixAI DiT.1", "MMDIT26A_MODEL": "PixAI DiT.2", "CHAT": "Edit"}
+    return mapping.get(t, "Model")
+
 def check_refresh(resp):
     new_t = resp.cookies.get("user_token")
     return new_t if new_t else None
@@ -64,52 +76,29 @@ def index(): return "Active"
 @app.route('/api/restart', methods=['POST'])
 def restart(): os._exit(1)
 
-# NEW SEARCH LOGIC: MODELS
 @app.route('/api/search_models', methods=['POST'])
 def search_models():
     d = request.json
-    payload = {
-        "operationName": "listGenerationModels",
-        "variables": {
-            "first": 20,
-            "keyword": d.get("keyword"),
-            "feed": d.get("sort"),
-            "types": ["ANY_MODEL"],
-            "after": d.get("cursor")
-        },
-        "extensions": {"persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}}
-    }
-    r = requests.post(API_URL, json=payload, headers=get_h(d.get("token")))
+    v = {"keyword": d.get("keyword"), "feed": "meilisearch", "types": ["ANY_MODEL"], "first": 20, "after": d.get("cursor")}
+    r = requests.post(API_URL, json={"operationName": "listGenerationModels", "variables": v, "query": Q_SEARCH}, headers=get_h(d.get("token")))
     res = r.json()
     items = []
     for e in res['data']['generationModels']['edges']:
         n = e['node']
         m_id = n['latestAvailableVersion']['id'] if n.get('latestAvailableVersion') else n['id']
-        items.append({"name": n['title'], "id": m_id, "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n.get('refCount')), "likes": fmt_num(n.get('likedCount'))})
+        items.append({"name": n['title'], "id": m_id, "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n.get('refCount')), "likes": fmt_num(n.get('likedCount')), "type": fmt_type(n.get('type'))})
     return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r)})
 
-# NEW SEARCH LOGIC: LORAS
 @app.route('/api/search', methods=['POST'])
 def search_loras():
     d = request.json
-    payload = {
-        "operationName": "listGenerationModels",
-        "variables": {
-            "first": 20,
-            "keyword": d.get("keyword"),
-            "feed": d.get("sort"),
-            "types": ["ANY_LORA"],
-            "loraBaseModelTypes": ["SDXL_MODEL"],
-            "after": d.get("cursor")
-        },
-        "extensions": {"persistedQuery": {"version": 1, "sha256Hash": H_MODEL_SEARCH}}
-    }
-    r = requests.post(API_URL, json=payload, headers=get_h(d.get("token")))
+    v = {"keyword": d.get("keyword"), "feed": "meilisearch", "types": ["ANY_LORA"], "first": 20, "after": d.get("cursor")}
+    r = requests.post(API_URL, json={"operationName": "listGenerationModels", "variables": v, "query": Q_SEARCH}, headers=get_h(d.get("token")))
     res = r.json()
     items = []
     for e in res['data']['generationModels']['edges']:
         n = e['node']
-        items.append({"name": n['title'], "id": n['id'], "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n.get('refCount')), "likes": fmt_num(n.get('likedCount'))})
+        items.append({ "name": n['title'], "id": n['id'], "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n.get('refCount')), "likes": fmt_num(n.get('likedCount'))})
     return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r)})
 
 @app.route('/api/lora_meta', methods=['POST'])
@@ -131,6 +120,8 @@ def generate():
     for conf in lora_configs:
         vid, wgt, trg = conf['v_id'], float(conf['weight']), conf['triggers']
         l_w[vid] = wgt; all_t += f"{trg}, "; l_p.append({"versionId": vid, "weight": wgt, "triggerWords": trg, "positionInfo": {"startIndex": 181, "endIndex": 181}})
+    
+    # PAYLOAD UPDATED TO MATCH genrate.txt EXACTLY
     payload = {
         "operationName": "createGenerationTask", 
         "variables": {
@@ -141,8 +132,10 @@ def generate():
                 "width": int(d.get("w", 832)), 
                 "height": int(d.get("h", 1248)), 
                 "batchSize": int(d.get("batch", 1)), 
-                "seed": "", "priority": 1000, 
-                "lora": l_w, "loraParameters": l_p, 
+                "seed": "", # Required by new API
+                "priority": 1000, # Required by new API
+                "lora": l_w, 
+                "loraParameters": l_p, 
                 "mediaId": d.get("mediaId"), 
                 "strength": float(d.get("strength", 0.55)), 
                 "samplingSteps": int(d.get("steps", 28)), 
@@ -150,10 +143,14 @@ def generate():
                 "cfgScale": float(d.get("cfg", 12.7)), 
                 "promptHelper": {"withStage": True, "userWantToEnable": True, "enable": True}
             }, 
-            "extra": {"naturalPrompts": str(d.get("prompt"))}
+            "extra": {"naturalPrompts": str(d.get("prompt"))} # Fixed: Plain string
         }, 
-        "extensions": {"clientLibrary": {"name": "@apollo/client", "version": "4.1.4"}, "persistedQuery": {"version": 1, "sha256Hash": H_GEN}}
+        "extensions": {
+            "clientLibrary": {"name": "@apollo/client", "version": "4.1.4"}, # Required for token switching
+            "persistedQuery": {"version": 1, "sha256Hash": H_GEN}
+        }
     }
+    
     r_init = requests.post(API_URL, json=payload, headers=get_h(token))
     res_raw = r_init.json()
     if 'errors' in res_raw: return jsonify({"status": "error", "raw": res_raw})
@@ -182,7 +179,12 @@ def tasks():
         node = edge['node']
         if node['status'] == "completed":
             p_node = node['parameters']
-            task_data.append({"url": node['media']['urls'][0]['url'], "p_orig": clean_txt(node.get('prompts', 'N/A')), "p_final": clean_txt(p_node.get('prompts')), "neg": clean_txt(p_node.get('negativePrompts', "")), "id": node['id'], "size": f"{p_node.get('width')}x{p_node.get('height')}", "steps": p_node.get('samplingSteps'), "cfg": p_node.get('cfgScale'), "method": p_node.get('samplingMethod'), "loras": [{"t": l.get('triggerWords'), "w": l.get('weight')} for l in p_node.get('loraParameters', [])]})
+            extra = p_node.get('extra', {})
+            natural_data = extra.get('naturalPrompts', [])
+            if isinstance(natural_data, list) and len(natural_data) > 0: orig_prompt = natural_data[0]
+            elif isinstance(natural_data, str) and len(natural_data) > 1: orig_prompt = natural_data
+            else: orig_prompt = p_node.get('prompts', 'N/A')
+            task_data.append({"url": node['media']['urls'][0]['url'], "p_orig": clean_txt(orig_prompt), "p_final": clean_txt(p_node.get('prompts')), "neg": clean_txt(p_node.get('negativePrompts', "")), "id": node['id'], "time": format_pixai_time(node.get('createdAt')), "size": f"{p_node.get('width')}x{p_node.get('height')}", "steps": p_node.get('samplingSteps'), "cfg": p_node.get('cfgScale'), "method": p_node.get('samplingMethod'), "ref_url": f"https://api.pixai.art/v1/media/{p_node.get('mediaId')}/thumbnail" if p_node.get('mediaId') else None, "loras": [{"t": l.get('triggerWords'), "w": l.get('weight')} for l in p_node.get('loraParameters', [])]})
     return jsonify({"status": "success", "tasks": task_data, "cursor": resp_json['data']['me']['tasks']['pageInfo']['startCursor'] if resp_json['data']['me']['tasks']['pageInfo']['hasPreviousPage'] else None, "refreshed_token": check_refresh(r)})
 
 @app.route('/api/daily_claim', methods=['POST'])

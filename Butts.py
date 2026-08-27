@@ -23,7 +23,7 @@ H_UPLOAD = "dd71971acde11807d01862ff1a94657479f7e833af75eac850aa2de0a14fa1fa"
 H_COST   = "50567e9680327f27a692e76f62b1b3699b24467f3747b0e14d3345d2e3077395"
 H_18PLUS = "fb22173aa2a43ff08be4221a17094a1445cb212e1b1970a1cee8c37e98d38304"
 H_REW    = "923002464a8e816706394061c18316cd2d14f5f025dbd1d08020e44cd8a23546"
-H_MODEL_SEARCH = "1658f8e716184e95d3177d20fad189d8f7b250fb30e8401496ed0aaf34e4ad83"
+H_MODEL_SEARCH = "b7a2d663bc0381dd6eb26f8c68f702cb928bea720982f6f5553ea1629a8e871d"
 
 Q_SEARCH = """query listGenerationModels($keyword: String, $feed: String, $types: [GenerationModelType!], $first: Int, $after: String) {
   generationModels(keyword: $keyword, feed: $feed, types: $types, first: $first, after: $after) {

@@ -6,7 +6,7 @@ app = Flask(__name__)
 CORS(app)
 
 API_URL = "https://api.pixai.art/graphql"
-# NEW HASH FROM YOUR listm.txt
+# NEW HASH FROM AUGUST 27 LOGS (listm.txt)
 H_SEARCH = "b7a2d663bc0381dd6eb26f8c68f702cb928bea720982f6f5553ea1629a8e871d"
 
 def get_h(t):
@@ -17,35 +17,37 @@ def get_h(t):
         "Accept": "application/json"
     }
 
+# THIS FIXES THE "ACTIVE" VIEW ON YOUR URL
+@app.route('/')
+def index():
+    return "Backend Status: Active"
+
 @app.route('/api/search', methods=['POST'])
 def search():
     d = request.json
     token = d.get("token")
     
-    # Building variables exactly like listm.txt
+    # Variables mapped exactly from listm.txt
     variables = {
         "first": 36,
-        "types": [d.get("type", "ANY_LORA")], # ANY_LORA or ANY_MODEL
-        "feed": d.get("feed", "meilisearch"), # trending, meilisearch, or top_liked
+        "types": [d.get("type", "ANY_LORA")],
+        "feed": d.get("feed", "meilisearch"),
         "keyword": d.get("keyword", "")
     }
     
-    # Only add SDXL filter if searching for LoRAs
+    # Filter for SDXL if searching LoRAs
     if variables["types"] == ["ANY_LORA"]:
         variables["loraBaseModelTypes"] = ["SDXL_MODEL"]
         
     if d.get("cursor"):
         variables["after"] = d.get("cursor")
 
-    # The official site uses GET for search now
+    # Official PixAI site uses GET for searches now
     params = {
         "operationName": "listGenerationModels",
         "variables": json.dumps(variables),
         "extensions": json.dumps({
-            "persistedQuery": {
-                "version": 1,
-                "sha256Hash": H_SEARCH
-            }
+            "persistedQuery": {"version": 1, "sha256Hash": H_SEARCH}
         })
     }
 
@@ -60,12 +62,10 @@ def search():
         results = []
         for e in edges:
             node = e['node']
-            # Find the best thumbnail
-            thumb = ""
-            if node.get('media') and node['media'].get('urls'):
-                # Try to get STILL_THUMBNAIL first, fallback to PUBLIC
-                urls = node['media']['urls']
-                thumb = next((u['url'] for u in urls if u['variant'] == "STILL_THUMBNAIL"), urls[0]['url'])
+            urls = node.get('media', {}).get('urls', [])
+            # Try to get STILL_THUMBNAIL, otherwise take first URL
+            thumb = next((u['url'] for u in urls if u['variant'] == "STILL_THUMBNAIL"), 
+                         (urls[0]['url'] if urls else ""))
             
             results.append({
                 "id": node['id'],
@@ -81,7 +81,7 @@ def search():
             "hasNext": page_info.get('hasNextPage', False)
         })
     except Exception as e:
-        return jsonify({"error": str(e), "raw": res if 'res' in locals() else None})
+        return jsonify({"status": "error", "msg": str(e)})
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))

@@ -90,7 +90,7 @@ def search_models():
         items.append({"name": n['title'], "id": m_id, "thumb": next((u['url'] for u in n['media']['urls'] if u['variant'] == "STILL_THUMBNAIL"), ""), "usage": fmt_num(n.get('refCount')), "likes": fmt_num(n.get('likedCount')), "type": fmt_type(n.get('type'))})
     return jsonify({"results": items, "cursor": res['data']['generationModels']['pageInfo']['endCursor'] if res['data']['generationModels']['pageInfo']['hasNextPage'] else None, "refreshed_token": check_refresh(r)})
 
-# ✅ FIXED: Updated LoRA search with correct hash and parameters
+# ✅ FIXED: Updated LoRA search - EXACTLY like your working Termux test
 @app.route('/api/search', methods=['POST'])
 def search_loras():
     d = request.json
@@ -98,7 +98,7 @@ def search_loras():
     keyword = d.get("keyword", "")
     cursor = d.get("cursor")
     
-    # Build variables matching working HAR log
+    # Build variables EXACTLY like working Termux code
     variables = {
         "first": 36,
         "types": ["ANY_LORA"],

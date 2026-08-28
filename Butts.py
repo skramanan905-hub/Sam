@@ -6,7 +6,7 @@ from datetime import datetime
 app = Flask(__name__)
 CORS(app)
 
-# ================= MASTER CONFIGURATION (UPDATED AUG 27) =================
+# ================= MASTER CONFIGURATION (AUG 27 BASE + BUM HISTORY) =================
 API_URL = "https://api.pixai.art/graphql"
 DAILY_URL = "https://api.pixai.art/v2/claim/pixai-daily-credits"
 REST_FOLLOW_URL = "https://api.pixai.art/v2/quest-v2/report-social-follow"
@@ -15,13 +15,15 @@ REST_VISIT_URL = "https://api.pixai.art/v2/quest-v2/report-visit"
 # UPDATED HASHES
 H_GEN    = "7662bf96848c0cd1e03cafc5a6b61785481a55a1c92faec3a248da9195bf9d25"
 H_POLL   = "2526f64c73c59fcfeff938b0f4a8b3b610f2294bc6eb6b6b281aa671ac81a08e"
-H_LIST   = "cc067203ddd0846c19d9e247d837c32da498247ec252fe30828434f2f136f53d" # Updated to bum.py version for better field support
 H_SEARCH = "b7a2d663bc0381dd6eb26f8c68f702cb928bea720982f6f5553ea1629a8e871d"
 H_META   = "cd94c1ebc6c2ee3bb3c10e1cb7c80cbd05c4470094b10e48a539aaaf36879696"
 H_CRE    = "9356b42a4ff6e987347a1f1ee3de7aba4bd103b1cdbfbbc4c5c5fcf52767ad66"
 H_ROLL   = "f0778d88963cc4e40749a8ecd9d510808b4a14cd63fac498e7763e6d5d780e5e"
 H_UPLOAD = "dd71971acde11807d01862ff1a94657479f7e833af75eac850aa2de0a14fa1fa"
 H_18PLUS = "fb22173aa2a43ff08be4221a17094a1445cb212e1b1970a1cee8c37e98d38304"
+
+# BUM.PY HISTORY HASH (Supports prompt extraction better)
+H_LIST   = "cc067203ddd0846c19d9e247d837c32da498247ec252fe30828434f2f136f53d"
 
 def get_h(t): 
     return {"Authorization": f"Bearer {t.strip()}", "Content-Type": "application/json", "x-browser-id": "56e77fe10bfcfb337ef2d43bc0df330f", "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36", "Accept": "application/graphql-response+json,application/json;q=0.9"}
@@ -53,7 +55,7 @@ def index(): return "Active"
 @app.route('/api/restart', methods=['POST'])
 def restart(): os._exit(1)
 
-# ================= SEARCH & META =================
+# ================= SEARCH LOGIC =================
 @app.route('/api/search', methods=['POST'])
 def search_unified():
     d = request.json
@@ -85,7 +87,7 @@ def lora_meta():
     v = data['latestAvailableVersion']
     return jsonify({"v_id": v['id'], "trigger": v['extra'].get('triggerWords', ""), "name": data['title'], "id": d.get("id"), "refreshed_token": check_refresh(r)})
 
-# ================= GENERATION & TASKS =================
+# ================= GENERATION LOGIC =================
 @app.route('/api/generate', methods=['POST'])
 def generate():
     d = request.json
@@ -94,6 +96,7 @@ def generate():
     for conf in lora_configs:
         vid, wgt, trg = conf['v_id'], float(conf['weight']), conf['triggers']
         l_w[vid] = wgt; all_t += f"{trg}, "; l_p.append({"versionId": vid, "weight": wgt, "triggerWords": trg, "positionInfo": {"startIndex": 0, "endIndex": 0}})
+    
     payload = {
         "operationName": "createGenerationTask", 
         "variables": {
@@ -132,7 +135,7 @@ def check_task():
     status = sr['data']['task']['status']
     return jsonify({"status": status, "raw": sr, "images": [i['url'] for i in sr['data']['task']['media']['urls'] if i['variant'] == "PUBLIC"] if status == "completed" else [], "refreshed_token": check_refresh(r)})
 
-# ================= UPDATED HISTORY LOGIC (FROM BUM.PY) =================
+# ================= NEW HISTORY LOGIC (REPLACED FROM BUM.PY) =================
 @app.route('/api/tasks', methods=['POST'])
 def tasks():
     d = request.json
@@ -152,14 +155,14 @@ def tasks():
             p_node = node['parameters']
             extra = p_node.get('extra', {})
             
-            # THE LOGIC THAT PREVENTS N/A:
+            # Smart Prompt Extraction Logic
             natural_data = extra.get('naturalPrompts', [])
             if isinstance(natural_data, list) and len(natural_data) > 0: 
                 orig_prompt = natural_data[0]
             elif isinstance(natural_data, str) and len(natural_data) > 1: 
                 orig_prompt = natural_data
             else: 
-                orig_prompt = p_node.get('prompts', '') # Fallback to final prompt
+                orig_prompt = p_node.get('prompts', '') 
 
             task_data.append({
                 "url": node['media']['urls'][0]['url'] if node.get('media') else "", 
@@ -175,7 +178,7 @@ def tasks():
             })
     return jsonify({"status": "success", "tasks": task_data, "cursor": resp_json['data']['me']['tasks']['pageInfo']['startCursor'], "refreshed_token": check_refresh(r)})
 
-# ================= TOOLS =================
+# ================= TOOLS & CLAIMS =================
 @app.route('/api/daily_claim', methods=['POST'])
 def daily_claim():
     r = requests.post(DAILY_URL, headers=get_h(request.json.get("token")), data="")
@@ -186,6 +189,41 @@ def credits():
     p = {"operationName":"getMyQuota","variables":"{}","extensions":json.dumps({"persistedQuery":{"version":1,"sha256Hash":H_CRE}})}
     r = requests.get(API_URL, params=p, headers=get_h(request.json.get("token")))
     return jsonify({"credits": r.json()['data']['me']['quotaAmount'], "refreshed_token": check_refresh(r)})
+
+@app.route('/api/claim_old', methods=['POST'])
+def claim_old():
+    h, tl = get_h(request.json.get("token")), []
+    q = "mutation followSocialMedia($platform: String!) { followSocialMedia(platform: $platform) { success __typename } }"
+    for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
+        r = requests.post(API_URL, json={"operationName":"followSocialMedia","variables":{"platform":p},"query":q}, headers=h)
+        tl.append({p: r.text}); time.sleep(1)
+    return jsonify({"status": "success", "raw": tl})
+
+@app.route('/api/claim_new', methods=['POST'])
+def claim_new():
+    h, tl = get_h(request.json.get("token")), []
+    for p in ["tiktok", "youtube", "instagram", "twitter", "discord"]:
+        r = requests.post(REST_FOLLOW_URL, json={"platform": p}, headers=h)
+        tl.append({p: r.text}); time.sleep(1)
+    return jsonify({"status": "success", "raw": tl})
+
+@app.route('/api/claim_visits', methods=['POST'])
+def claim_visits():
+    h, tl = get_h(request.json.get("token")), []
+    for u in ["https://youtu.be/nFJoUWvs0ko?si=YvjDeXw5hixETOR8", "https://pixai.art/tsubaki-2"]:
+        r = requests.post(REST_VISIT_URL, json={"url": u}, headers=h)
+        tl.append({u: r.text}); time.sleep(1.5)
+    return jsonify({"status": "success", "raw": tl})
+
+@app.route('/api/claim_mios', methods=['POST'])
+def claim_mios():
+    h, tl = get_h(request.json.get("token")), []
+    r1 = requests.post(API_URL, json={"operationName":"rollAprilFools2026Lottery","variables":{},"extensions":{"persistedQuery":{"version":1,"sha256Hash":H_ROLL}}}, headers=h)
+    tl.append({"lottery": r1.text})
+    for i in range(3226, 3235):
+        r_t = requests.post(f"https://api.pixai.art/v2/event/aprilFoolsEvent2026/tier-rewards/{i}/claim", headers=h, data="")
+        tl.append({f"tier_{i}": r_t.status_code}); time.sleep(0.5)
+    return jsonify({"status": "success", "raw": tl})
 
 @app.route('/api/enable_18', methods=['POST'])
 def enable_18():

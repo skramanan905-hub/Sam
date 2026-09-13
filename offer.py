@@ -3,7 +3,11 @@ import traceback, requests
 from datetime import datetime
 from flask import Flask, jsonify
 
-BOT_TOKEN = os.environ.get("8817040407:AAHxM7D7l5Cc7yuIZvpaeS7guyIzQic9fQI", "").strip()
+# ============ HARDCODED CONFIG ============
+BOT_TOKEN = "8817040407:AAHxM7D7l5Cc7yuIZvpaeS7guyIzQic9fQI"
+CHAT_ID = "1827265590"
+# ==========================================
+
 PORT = int(os.environ.get("PORT", "10000"))
 DB_PATH = os.environ.get("DB_PATH", "/data/accounts.db")
 if not os.path.isdir(os.path.dirname(DB_PATH)):
@@ -557,6 +561,9 @@ def boot():
         log("⚠️ BOT_TOKEN missing")
     else:
         threading.Thread(target=poll, daemon=True).start()
+        # Send a startup message to your chat
+        if CHAT_ID:
+            tg_send(CHAT_ID, "🚀 Bot started")
     log("boot ok db=", DB_PATH)
 
 boot()

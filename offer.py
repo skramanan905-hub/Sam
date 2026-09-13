@@ -320,35 +320,38 @@ def kb_main():
         pre = "🟢 " if running(i) else ""
         rows.append([{"text": f"{pre}{n}",
                       "callback_data": f"a:{i}"}])
-    rows.append([{"text": "➕ Add", "callback_data": "add"}])
+    rows.append([{"text": "➕ Add Token", "callback_data": "add"}])
     rows.append([{"text": "🔄 Refresh", "callback_data": "home"}])
     return {"inline_keyboard": rows}
 
 def kb_acc(i):
     return {"inline_keyboard": [
         [{"text": "📊 Status", "callback_data": f"s:{i}"}],
-        [{"text": "▶️ Run Next", "callback_data": f"n:{i}"}],
-        [{"text": "🏁 Run All", "callback_data": f"r:{i}"}],
-        [{"text": "💰 Farm", "callback_data": f"f:{i}"}],
+        [{"text": "▶️ Run Next Stage", "callback_data": f"n:{i}"}],
+        [{"text": "🏁 Run All Stages", "callback_data": f"r:{i}"}],
+        [{"text": "💰 Farm Gems", "callback_data": f"f:{i}"}],
         [{"text": "🗑 Remove", "callback_data": f"x:{i}"}],
         [{"text": "◀️ Back", "callback_data": "home"}],
     ]}
 
 def kb_rm(i):
     return {"inline_keyboard": [
-        [{"text": "✅ Yes", "callback_data": f"y:{i}"}],
-        [{"text": "❌ No", "callback_data": f"a:{i}"}],
+        [{"text": "✅ Yes, remove", "callback_data": f"y:{i}"}],
+        [{"text": "❌ Cancel", "callback_data": f"a:{i}"}],
     ]}
 
 def menu_text():
     accs = db_list()
-    L = ["*Super Offer Bot*", f"Accounts: *{len(accs)}*", ""]
+    L = ["*Super Offer Bot*",
+         f"Accounts: *{len(accs)}*", ""]
     if not accs:
-        L.append("_No accounts. Tap ➕ Add._")
+        L.append("_No accounts. Tap ➕ Add Token._")
     else:
         for i, n, u in accs:
             r = " 🟢" if running(i) else ""
-            L.append(f"• #{i} — *{n}*{r}")
+            L.append(f"• *#{i}* `{u[:12]}…`{r}")
+    L.append("")
+    L.append("_Tap an account below_")
     return "\n".join(L)
 
 def acc_text(i):
@@ -387,7 +390,9 @@ def cb(c):
         tg_ans(cid)
         kv_set(f"aw:{chat}", "add")
         tg_edit(chat, mid,
-            "Send: `name | token`\n\n/cancel to abort.",
+            "Paste your *bearer token*.\n"
+            "Starts with `eyJ...`\n\n"
+            "Send /cancel to abort.",
             {"inline_keyboard":
                 [[{"text": "❌ Cancel", "callback_data": "home"}]]})
     elif d.startswith("a:"):
@@ -399,20 +404,20 @@ def cb(c):
         tg_edit(chat, mid, acc_text(i), kb_acc(i))
     elif d.startswith("x:"):
         i = int(d.split(":")[1]); tg_ans(cid)
-        tg_edit(chat, mid, f"Remove #{i}?", kb_rm(i))
+        tg_edit(chat, mid, f"Remove *#{i}*?", kb_rm(i))
     elif d.startswith("y:"):
         i = int(d.split(":")[1])
         ok = db_del(i)
-        tg_ans(cid, "done" if ok else "nope")
+        tg_ans(cid, "removed" if ok else "nope")
         tg_edit(chat, mid, menu_text(), kb_main())
     elif d.startswith("n:"):
-        i = int(d.split(":")[1]); tg_ans(cid, "…")
+        i = int(d.split(":")[1]); tg_ans(cid, "starting…")
         go_next(chat, i)
     elif d.startswith("r:"):
-        i = int(d.split(":")[1]); tg_ans(cid, "…")
+        i = int(d.split(":")[1]); tg_ans(cid, "starting…")
         go_all(chat, i)
     elif d.startswith("f:"):
-        i = int(d.split(":")[1]); tg_ans(cid, "…")
+        i = int(d.split(":")[1]); tg_ans(cid, "starting…")
         go_farm(chat, i)
     else:
         tg_ans(cid)
@@ -426,7 +431,8 @@ def go_next(chat, i):
         tg_send(chat, f"*#{i}* ▶️ next…")
         try:
             ok = run_stage(a, N)
-            tg_send(chat, f"*#{i}* {'✅' if ok else '❌'}")
+            tg_send(chat, f"*#{i}* {'✅ done' if ok else '❌ failed'}",
+                    kb_acc(i))
         except Exception as e:
             tg_send(chat, f"*#{i}* 💥 {e}")
     if not spawn(i, j):
@@ -438,15 +444,15 @@ def go_all(chat, i):
         tg_send(chat, "not found"); return
     def N(m): tg_send(chat, f"*#{i}* {m}")
     def j():
-        tg_send(chat, f"*#{i}* 🏁 all…")
+        tg_send(chat, f"*#{i}* 🏁 running all…")
         while True:
             try:
                 st = status(a[2])
                 if st["attemptNumber"] > 20 or st.get("weekComplete"):
-                    tg_send(chat, f"*#{i}* 🎉 done"); return
+                    tg_send(chat, f"*#{i}* 🎉 week complete"); return
                 ok = run_stage(a, N)
                 if not ok:
-                    tg_send(chat, f"*#{i}* ❌ stop"); return
+                    tg_send(chat, f"*#{i}* ❌ stopping"); return
                 st = status(a[2])
                 cd = iso_ms(st.get("cooldownEndsAt"))
                 if cd and cd > time.time():
@@ -464,10 +470,10 @@ def go_farm(chat, i):
         tg_send(chat, "not found"); return
     def N(m): tg_send(chat, f"*#{i}* {m}")
     def j():
-        tg_send(chat, f"*#{i}* 💰 farm…")
+        tg_send(chat, f"*#{i}* 💰 farming…")
         try:
             b = farm_until(a[2], 999, N)
-            tg_send(chat, f"*#{i}* bal={b}")
+            tg_send(chat, f"*#{i}* bal={b}", kb_acc(i))
         except Exception as e:
             tg_send(chat, f"*#{i}* 💥 {e}")
     if not spawn(i, j):
@@ -480,26 +486,35 @@ def msg(m):
         kv_set(f"aw:{chat}", "")
         tg_send(chat, "Cancelled", kb_main()); return
     if kv_get(f"aw:{chat}") == "add":
-        if "|" not in t:
-            tg_send(chat, "Format: `name | token`"); return
-        n, tok = [p.strip() for p in t.split("|", 1)]
-        if not n or not tok:
-            tg_send(chat, "Need both"); return
+        tok = t
+        if not tok.startswith("eyJ"):
+            tg_send(chat,
+                "❌ Not a JWT.\nToken should start with `eyJ...`\n\n"
+                "Send it or /cancel.")
+            return
         uid = jwt_uid(tok)
         if not uid:
-            tg_send(chat, "❌ Bad token"); return
-        new = db_add(n, tok)
+            tg_send(chat, "❌ Invalid token."); return
+        existing = len(db_list())
+        auto_name = f"Account {existing + 1}"
+        new = db_add(auto_name, tok)
         kv_set(f"aw:{chat}", "")
         if new is None:
-            tg_send(chat, "❌ Duplicate")
+            tg_send(chat, "❌ Token already added.", kb_main())
         else:
-            tg_send(chat, f"✅ #{new} {n}\nuid: `{uid}`", kb_main())
+            tg_send(chat,
+                f"✅ *{auto_name}* added\nuid: `{uid}`",
+                kb_main())
         return
     if t.startswith("/start") or t.startswith("/accounts"):
         tg_send(chat, menu_text(), kb_main()); return
     if t.startswith("/add"):
         kv_set(f"aw:{chat}", "add")
-        tg_send(chat, "Send `name | token`"); return
+        tg_send(chat,
+            "Paste your *bearer token* (`eyJ...`).\n\n/cancel to abort.",
+            {"inline_keyboard":
+                [[{"text": "❌ Cancel", "callback_data": "home"}]]})
+        return
     tg_send(chat, "Use /start", kb_main())
 
 def poll():
@@ -561,7 +576,6 @@ def boot():
         log("⚠️ BOT_TOKEN missing")
     else:
         threading.Thread(target=poll, daemon=True).start()
-        # Send a startup message to your chat
         if CHAT_ID:
             tg_send(CHAT_ID, "🚀 Bot started")
     log("boot ok db=", DB_PATH)

@@ -616,4 +616,9 @@ def status_page():
 def stop():
     os._exit(1)
 
-# =============
+# ============================================================
+# ENTRY
+# ============================================================
+if __name__ == "__main__":
+    threading.Thread(target=tg_boot, daemon=True).start()
+    app.run(host="0.0.0.0", port=PORT, threaded=True)

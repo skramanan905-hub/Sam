@@ -3,17 +3,22 @@ import traceback, requests
 from datetime import datetime
 from flask import Flask, jsonify
 
-# ============ HARDCODED CONFIG ============
+# ============ HARDCODED ============
 BOT_TOKEN = "8817040407:AAHxM7D7l5Cc7yuIZvpaeS7guyIzQic9fQI"
-CHAT_ID = "1827265590"
-# ==========================================
+CHAT_ID   = "1827265590"
+# ===================================
 
-PORT = int(os.environ.get("PORT", "10000"))
+PORT    = int(os.environ.get("PORT", "10000"))
 DB_PATH = os.environ.get("DB_PATH", "/data/accounts.db")
 if not os.path.isdir(os.path.dirname(DB_PATH)):
     DB_PATH = "accounts.db"
 BASE = "https://api.offerplay.in"
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+VERSION = "1.0.17"
+START_TIME = time.time()
+
+# ---- timing (seconds) ----
 G_SURV = 35; G_AFTER = 5; AD_W = 20
 I_W = 30; U_W = 125; C_GAP = 3; MARG = 5
 
@@ -29,14 +34,16 @@ INSTALL = {
 def log(*a):
     print(f"[{datetime.utcnow():%H:%M:%S}]", *a, flush=True)
 
+# ============================================================
+# DB
+# ============================================================
 def db_init():
     c = sqlite3.connect(DB_PATH, check_same_thread=False)
     x = c.cursor()
     x.execute("""CREATE TABLE IF NOT EXISTS accounts(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT, token TEXT UNIQUE, uid TEXT, at TEXT)""")
-    x.execute("""CREATE TABLE IF NOT EXISTS kv(
-    k TEXT PRIMARY KEY, v TEXT)""")
+    x.execute("""CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT)""")
     c.commit()
     return c
 
@@ -87,6 +94,9 @@ def kv_get(k, d=None):
         r = x.fetchone()
         return r[0] if r else d
 
+# ============================================================
+# JWT
+# ============================================================
 def jwt_p(tok):
     try:
         s = tok.split(".")[1]
@@ -101,6 +111,9 @@ def jwt_uid(tok):
 def jwt_days(tok):
     return (jwt_p(tok).get("exp", 0) - time.time()) / 86400
 
+# ============================================================
+# TG
+# ============================================================
 def tg_send(cid, t, kb=None):
     d = {"chat_id": cid, "text": t, "parse_mode": "Markdown"}
     if kb: d["reply_markup"] = json.dumps(kb)
@@ -117,9 +130,13 @@ def tg_edit(cid, mid, t, kb=None):
 def tg_ans(cbid, t=None):
     d = {"callback_query_id": cbid}
     if t: d["text"] = t
-    try: requests.post(f"{TG_API}/answerCallbackQuery", data=d, timeout=10)
+    try: requests.post(f"{TG_API}/answerCallbackQuery",
+                       data=d, timeout=10)
     except Exception: pass
 
+# ============================================================
+# OFFERPLAY API
+# ============================================================
 def hdr(tok):
     return {
         "accept": "application/json, text/plain, */*",
@@ -140,13 +157,11 @@ def hdr(tok):
     }
 
 def api_get(tok, p):
-    r = requests.get(BASE + p, headers=hdr(tok), timeout=30)
-    return r.json()
+    return requests.get(BASE + p, headers=hdr(tok), timeout=30).json()
 
 def api_post(tok, p, b=None):
-    r = requests.post(BASE + p, headers=hdr(tok),
-                      json=b or {}, timeout=30)
-    return r.json()
+    return requests.post(BASE + p, headers=hdr(tok),
+                         json=b or {}, timeout=30).json()
 
 def gap(sec, label, N=None):
     if N: N(f"⏳ {sec}s — {label}")
@@ -169,6 +184,9 @@ def iso_ms(s):
     except Exception:
         return None
 
+# ============================================================
+# GEM FARM
+# ============================================================
 def farm_1(tok, N=None):
     c = api_post(tok, "/api/ballmaxxing/gem-config", {})
     c = c.get("data", {}) or {}
@@ -217,6 +235,9 @@ def farm_until(tok, tgt, N=None):
         else:
             z = 0
 
+# ============================================================
+# STAGE
+# ============================================================
 def enter(tok, N=None):
     r = api_post(tok, "/api/superoffers/enter", {})
     if not r.get("success"):
@@ -261,7 +282,7 @@ def do_claim(tok, aid, uid, N=None):
     return d
 
 def run_stage(acc, N=None):
-    aid_a, name, tok, uid = acc
+    _, name, tok, uid = acc
     def NN(m):
         if N: N(m)
     st = status(tok)
@@ -298,6 +319,9 @@ def run_stage(acc, N=None):
     do_claim(tok, a, uid, NN)
     return True
 
+# ============================================================
+# JOBS
+# ============================================================
 JOBS = {}
 
 def running(i):
@@ -314,6 +338,9 @@ def spawn(i, fn, *a):
     threading.Thread(target=w, daemon=True).start()
     return True
 
+# ============================================================
+# KEYBOARDS
+# ============================================================
 def kb_main():
     rows = []
     for i, n, u in db_list():
@@ -340,9 +367,12 @@ def kb_rm(i):
         [{"text": "❌ Cancel", "callback_data": f"a:{i}"}],
     ]}
 
+# ============================================================
+# TEXTS
+# ============================================================
 def menu_text():
     accs = db_list()
-    L = ["*Super Offer Bot*",
+    L = [f"*OfferPlay Bot v{VERSION}*",
          f"Accounts: *{len(accs)}*", ""]
     if not accs:
         L.append("_No accounts. Tap ➕ Add Token._")
@@ -366,7 +396,7 @@ def acc_text(i):
         ip = st.get("inProgressAttempt")
         ipt = f"`{ip['status']}` id={ip['id']}" if ip else "—"
     except Exception as e:
-        s = g = "?"; ce = False; cd = f"err"; ipt = "—"
+        s = g = "?"; ce = False; cd = "err"; ipt = "—"
     r = "🟢 RUNNING" if running(i) else "⚪ idle"
     return (f"*#{i} — {n}*\n"
             f"uid: `{uid}`\n"
@@ -378,6 +408,9 @@ def acc_text(i):
             f"cooldown: {cd}\n"
             f"inProgress: {ipt}")
 
+# ============================================================
+# CALLBACKS
+# ============================================================
 def cb(c):
     cid = c["id"]
     chat = c["message"]["chat"]["id"]
@@ -390,17 +423,14 @@ def cb(c):
         tg_ans(cid)
         kv_set(f"aw:{chat}", "add")
         tg_edit(chat, mid,
-            "Paste your *bearer token*.\n"
-            "Starts with `eyJ...`\n\n"
-            "Send /cancel to abort.",
+            "Paste your *bearer token* (`eyJ...`).\n\n/cancel to abort.",
             {"inline_keyboard":
                 [[{"text": "❌ Cancel", "callback_data": "home"}]]})
     elif d.startswith("a:"):
         i = int(d.split(":")[1]); tg_ans(cid)
         tg_edit(chat, mid, acc_text(i), kb_acc(i))
     elif d.startswith("s:"):
-        i = int(d.split(":")[1])
-        tg_ans(cid, "…")
+        i = int(d.split(":")[1]); tg_ans(cid, "…")
         tg_edit(chat, mid, acc_text(i), kb_acc(i))
     elif d.startswith("x:"):
         i = int(d.split(":")[1]); tg_ans(cid)
@@ -479,6 +509,9 @@ def go_farm(chat, i):
     if not spawn(i, j):
         tg_send(chat, f"*#{i}* busy")
 
+# ============================================================
+# MESSAGES
+# ============================================================
 def msg(m):
     chat = m["chat"]["id"]
     t = (m.get("text") or "").strip()
@@ -488,22 +521,20 @@ def msg(m):
     if kv_get(f"aw:{chat}") == "add":
         tok = t
         if not tok.startswith("eyJ"):
-            tg_send(chat,
-                "❌ Not a JWT.\nToken should start with `eyJ...`\n\n"
-                "Send it or /cancel.")
-            return
+            tg_send(chat, "❌ Not a JWT.\nStarts with `eyJ...`\n\n"
+                "Send or /cancel."); return
         uid = jwt_uid(tok)
         if not uid:
             tg_send(chat, "❌ Invalid token."); return
-        existing = len(db_list())
-        auto_name = f"Account {existing + 1}"
-        new = db_add(auto_name, tok)
+        n = len(db_list()) + 1
+        name = f"Account {n}"
+        new = db_add(name, tok)
         kv_set(f"aw:{chat}", "")
         if new is None:
             tg_send(chat, "❌ Token already added.", kb_main())
         else:
             tg_send(chat,
-                f"✅ *{auto_name}* added\nuid: `{uid}`",
+                f"✅ *{name}* added\nuid: `{uid}`",
                 kb_main())
         return
     if t.startswith("/start") or t.startswith("/accounts"):
@@ -517,9 +548,12 @@ def msg(m):
         return
     tg_send(chat, "Use /start", kb_main())
 
+# ============================================================
+# POLL LOOP — retries forever
+# ============================================================
 def poll():
     off = 0
-    log("poll start")
+    log("poll thread started")
     while True:
         try:
             r = requests.get(f"{TG_API}/getUpdates",
@@ -542,45 +576,44 @@ def poll():
         except requests.exceptions.ReadTimeout:
             continue
         except Exception as e:
-            log("poll", e); time.sleep(3)
+            log("poll err", e); time.sleep(3)
 
+def tg_boot():
+    """Keeps retrying forever if poll ever crashes."""
+    while True:
+        try:
+            if CHAT_ID:
+                tg_send(CHAT_ID, f"🚀 OfferPlay Bot v{VERSION} online")
+            poll()
+        except Exception as e:
+            log("tg_boot crashed, retry in 10s:", e)
+            time.sleep(10)
+
+# ============================================================
+# FLASK — main thread, keeps Render URL alive
+# ============================================================
 app = Flask(__name__)
 
 @app.route("/")
-def root():
-    return jsonify({"ok": True,
-        "accounts": len(db_list()),
-        "time": datetime.utcnow().isoformat() + "Z"})
+def index():
+    return "Active", 200
 
 @app.route("/health")
 def health():
-    return "ok", 200
+    return "Active", 200
 
-@app.route(f"/tg/{BOT_TOKEN}", methods=["POST"])
-def wh():
-    return "ok", 200
+@app.route("/status")
+def status_page():
+    return jsonify({
+        "ok": True,
+        "version": VERSION,
+        "accounts": len(db_list()),
+        "uptime_sec": int(time.time() - START_TIME),
+        "time": datetime.utcnow().isoformat() + "Z"
+    })
 
-@app.route("/run/<int:i>")
-def http_run(i):
-    a = db_get(i)
-    if not a: return jsonify({"err": "nf"}), 404
-    if running(i): return jsonify({"err": "busy"}), 409
-    def j():
-        try: run_stage(a, lambda m: log(f"#{i} {m}"))
-        except Exception as e: log("hr", e)
-    spawn(i, j)
-    return jsonify({"ok": True, "id": i})
+@app.route("/stop")
+def stop():
+    os._exit(1)
 
-def boot():
-    if not BOT_TOKEN:
-        log("⚠️ BOT_TOKEN missing")
-    else:
-        threading.Thread(target=poll, daemon=True).start()
-        if CHAT_ID:
-            tg_send(CHAT_ID, "🚀 Bot started")
-    log("boot ok db=", DB_PATH)
-
-boot()
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT)
+# =============

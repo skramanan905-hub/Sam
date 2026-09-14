@@ -16,10 +16,9 @@ if not os.path.isdir(os.path.dirname(DB_PATH)):
     DB_PATH = "accounts.db"
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-VERSION = "1.0.16"
+VERSION = "1.0.17"
 START_TIME = time.time()
 
-# ---- Reward Bro (Firebase backend on cash-bro project) ----
 GEM_URL   = "https://us-central1-cash-bro-8c96e.cloudfunctions.net/claimGems"
 SUPER_URL = "https://us-central1-cash-bro-8c96e.cloudfunctions.net/claimSuperOffer"
 GEM_VALUE   = "10"
@@ -31,7 +30,6 @@ INSTANCE_ID = ("c83aRHv6QD6dgvLIVax39r:APA91bEpVaezbqZEx5L-qi8LgyiVQ8pD_s8c1i"
                "FcuYCLH0CXTvVeimRT3owoNKIEvfB2vAw1yHsQBdrFnExDU-q6ksGxKzFqr_lR"
                "dQhaJHTCx9XM7zYbdGY")
 
-# ---- Read & Earn ----
 RE_BASE    = "https://app.rewardbro.in"
 RE_API_KEY = "rb_live_9f3c7a21d8b64e5ab4c2f1e98d6a73c5f0b"
 RE_DELAY   = 15
@@ -122,7 +120,7 @@ def tg_ans(cbid, t=None):
     except Exception: pass
 
 # ============================================================
-# REWARD BRO
+# REWARD BRO API CALLS
 # ============================================================
 def gem_hdr(bearer, appcheck):
     return {
@@ -167,7 +165,7 @@ def run_gems(acc, N):
                 N("❌ appcheck rejected"); return 0
             if r.status_code == 200:
                 ok += 1
-                N(f"[{i}/{GEM_CLAIMS}] ✅ 200")
+                N(f"[{i}/{GEM_CLAIMS}] ✅")
             else:
                 N(f"[{i}/{GEM_CLAIMS}] {r.status_code} {r.text[:80]}")
         except Exception as e:
@@ -195,9 +193,6 @@ def run_full(acc, N):
     run_super(acc, N)
     N("🎯 done")
 
-# ============================================================
-# READ & EARN
-# ============================================================
 STOPS = set()
 
 def re_hdr():
@@ -212,7 +207,7 @@ def re_hdr():
 def re_loop(acc, N):
     aid = acc[0]
     uid = acc[4]
-    N(f"📖 Read & Earn starting ({RE_DELAY}s interval)")
+    N(f"📖 Read & Earn ({RE_DELAY}s interval)")
     count = 0
     while aid not in STOPS:
         count += 1
@@ -223,7 +218,7 @@ def re_loop(acc, N):
                 headers=re_hdr(), data=body,
                 verify=False, timeout=30)
             if r.status_code != 200:
-                N(f"[{count}] ❌ fetch {r.status_code} {r.text[:80]}")
+                N(f"[{count}] ❌ fetch {r.status_code}")
                 time.sleep(RE_DELAY); continue
             data = r.json()
             if not data.get("success"):
@@ -339,6 +334,71 @@ def acc_text(i):
             f"appcheck: `{ck}`")
 
 # ============================================================
+# ADD-ACCOUNT 3-STEP FLOW
+# ============================================================
+def start_add(chat):
+    kv_set(f"aw:{chat}", "add")
+    kv_set(f"tmp:{chat}:bearer", "")
+    kv_set(f"tmp:{chat}:appcheck", "")
+    tg_send(chat,
+        "➕ *Add Account — Step 1 of 3*\n\n"
+        "Send *bearer token*:\n"
+        "_(starts with `eyJ...`)_\n\n"
+        "/cancel to abort",
+        {"inline_keyboard":
+            [[{"text": "❌ Cancel", "callback_data": "home"}]]})
+
+def cancel_add(chat):
+    kv_set(f"aw:{chat}", "")
+    kv_set(f"tmp:{chat}:bearer", "")
+    kv_set(f"tmp:{chat}:appcheck", "")
+
+def handle_add_step(chat, t):
+    bearer = kv_get(f"tmp:{chat}:bearer", "")
+    appcheck = kv_get(f"tmp:{chat}:appcheck", "")
+
+    if not bearer:
+        if not t.startswith("eyJ"):
+            tg_send(chat, "❌ Must start with `eyJ...`\nTry again:")
+            return True
+        kv_set(f"tmp:{chat}:bearer", t.replace("Bearer ", ""))
+        tg_send(chat,
+            "✅ Bearer saved\n\n"
+            "➕ *Step 2 of 3*\n\n"
+            "Send *appcheck* token:\n"
+            "_(from `x-firebase-appcheck` header)_")
+        return True
+
+    if not appcheck:
+        if not t.startswith("eyJ"):
+            tg_send(chat, "❌ Must start with `eyJ...`\nTry again:")
+            return True
+        kv_set(f"tmp:{chat}:appcheck", t)
+        tg_send(chat,
+            "✅ AppCheck saved\n\n"
+            "➕ *Step 3 of 3*\n\n"
+            "Send *userId*:\n"
+            "_(numbers or letters, no spaces)_")
+        return True
+
+    uid = t.strip()
+    if not uid or " " in uid or len(uid) > 100:
+        tg_send(chat, "❌ Invalid userId.\nSend again:")
+        return True
+
+    n = len(db_list()) + 1
+    name = f"RB{n}"
+    new = db_add(name, bearer, appcheck, uid)
+    cancel_add(chat)
+    tg_send(chat,
+        f"✅ *{name}* added (id #{new})\n\n"
+        f"userId: `{uid}`\n"
+        f"bearer: `{bearer[:18]}…`\n"
+        f"appcheck: `{appcheck[:18]}…`",
+        kb_main())
+    return False
+
+# ============================================================
 # CALLBACKS
 # ============================================================
 def cb(c):
@@ -348,16 +408,12 @@ def cb(c):
     d = c.get("data", "")
 
     if d == "home":
+        cancel_add(chat)
         tg_ans(cid)
         tg_edit(chat, mid, menu_text(), kb_main())
     elif d == "add":
         tg_ans(cid)
-        kv_set(f"aw:{chat}", "add")
-        tg_edit(chat, mid,
-            "*Add Reward Bro*\n\nSend 3 lines:\n"
-            "`bearer`\n`appcheck`\n`userId`\n\nor /cancel",
-            {"inline_keyboard":
-                [[{"text": "❌ Cancel", "callback_data": "home"}]]})
+        start_add(chat)
     elif d.startswith("a:"):
         i = int(d.split(":")[1]); tg_ans(cid)
         tg_edit(chat, mid, acc_text(i), kb_acc(i))
@@ -411,33 +467,24 @@ def cb(c):
 def msg(m):
     chat = m["chat"]["id"]
     t = (m.get("text") or "").strip()
+
     if t == "/cancel":
-        kv_set(f"aw:{chat}", "")
+        cancel_add(chat)
         tg_send(chat, "Cancelled", kb_main()); return
+
     if kv_get(f"aw:{chat}") == "add":
-        lines = [x.strip() for x in t.splitlines() if x.strip()]
-        if len(lines) < 3:
-            tg_send(chat, "Need 3 lines:\n`bearer`\n`appcheck`\n`uid`")
-            return
-        bearer = lines[0].replace("Bearer ", "")
-        appcheck = lines[1]
-        uid = lines[2]
-        n = len(db_list()) + 1
-        name = f"RB{n}"
-        new = db_add(name, bearer, appcheck, uid)
-        kv_set(f"aw:{chat}", "")
-        tg_send(chat, f"✅ *{name}* added (#{new})", kb_main())
+        handle_add_step(chat, t)
         return
+
     if t.startswith("/start") or t.startswith("/menu"):
         tg_send(chat, menu_text(), kb_main()); return
     if t.startswith("/add"):
-        kv_set(f"aw:{chat}", "add")
-        tg_send(chat, "Send 3 lines:\n`bearer`\n`appcheck`\n`userId`")
-        return
+        start_add(chat); return
+
     tg_send(chat, "Use /start", kb_main())
 
 # ============================================================
-# POLL LOOP — retries forever
+# POLL LOOP
 # ============================================================
 def poll():
     off = 0
@@ -467,7 +514,6 @@ def poll():
             log("poll err", e); time.sleep(3)
 
 def tg_boot():
-    """Runs forever. Restarts poll if it ever crashes."""
     while True:
         try:
             if CHAT_ID:
@@ -478,7 +524,7 @@ def tg_boot():
             time.sleep(10)
 
 # ============================================================
-# FLASK — main thread, keeps Render URL alive
+# FLASK
 # ============================================================
 app = Flask(__name__)
 

@@ -1,7 +1,9 @@
 import os, json, time, sqlite3, threading
-import traceback, requests
+import traceback, requests, urllib3
 from datetime import datetime
 from flask import Flask, jsonify
+
+urllib3.disable_warnings()
 
 # ============ HARDCODED ============
 BOT_TOKEN = "8890014279:AAGuKNVfg2WJ21DXCS_kBXgVlexjRxXUhL8"
@@ -14,24 +16,25 @@ if not os.path.isdir(os.path.dirname(DB_PATH)):
     DB_PATH = "accounts.db"
 TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-VERSION = "1.0.15"
+VERSION = "1.0.16"
+START_TIME = time.time()
 
-# ---- Cash Bro ----
-CB_GEM_URL   = "https://us-central1-cash-bro-8c96e.cloudfunctions.net/claimGems"
-CB_SUPER_URL = "https://us-central1-cash-bro-8c96e.cloudfunctions.net/claimSuperOffer"
-GEM_VALUE    = "10"
-GEM_CLAIMS   = 20
-SUPER_VALUE  = "200"
-CB_DELAY     = 2
+# ---- Reward Bro (Firebase backend on cash-bro project) ----
+GEM_URL   = "https://us-central1-cash-bro-8c96e.cloudfunctions.net/claimGems"
+SUPER_URL = "https://us-central1-cash-bro-8c96e.cloudfunctions.net/claimSuperOffer"
+GEM_VALUE   = "10"
+GEM_CLAIMS  = 20
+SUPER_VALUE = "200"
+GEM_DELAY   = 2
 
 INSTANCE_ID = ("c83aRHv6QD6dgvLIVax39r:APA91bEpVaezbqZEx5L-qi8LgyiVQ8pD_s8c1i"
                "FcuYCLH0CXTvVeimRT3owoNKIEvfB2vAw1yHsQBdrFnExDU-q6ksGxKzFqr_lR"
                "dQhaJHTCx9XM7zYbdGY")
 
-# ---- Reward Bro ----
-RB_BASE    = "https://app.rewardbro.in"
-RB_API_KEY = "rb_live_9f3c7a21d8b64e5ab4c2f1e98d6a73c5f0b"
-RB_DELAY   = 15
+# ---- Read & Earn ----
+RE_BASE    = "https://app.rewardbro.in"
+RE_API_KEY = "rb_live_9f3c7a21d8b64e5ab4c2f1e98d6a73c5f0b"
+RE_DELAY   = 15
 
 def log(*a):
     print(f"[{datetime.utcnow():%H:%M:%S}]", *a, flush=True)
@@ -44,12 +47,7 @@ def db_init():
     x = c.cursor()
     x.execute("""CREATE TABLE IF NOT EXISTS acc(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind TEXT,
-    name TEXT,
-    bearer TEXT,
-    appcheck TEXT,
-    uid TEXT,
-    at TEXT)""")
+    name TEXT, bearer TEXT, appcheck TEXT, uid TEXT, at TEXT)""")
     x.execute("""CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT)""")
     c.commit()
     return c
@@ -57,31 +55,27 @@ def db_init():
 DB = db_init()
 LK = threading.Lock()
 
-def db_add(kind, name, bearer="", appcheck="", uid=""):
+def db_add(name, bearer, appcheck, uid):
     with LK:
         x = DB.cursor()
-        x.execute("INSERT INTO acc(kind,name,bearer,appcheck,uid,at)"
-                  "VALUES(?,?,?,?,?,?)",
-                  (kind, name, bearer, appcheck, uid,
+        x.execute("INSERT INTO acc(name,bearer,appcheck,uid,at) "
+                  "VALUES(?,?,?,?,?)",
+                  (name, bearer, appcheck, uid,
                    datetime.utcnow().isoformat()))
         DB.commit()
         return x.lastrowid
 
-def db_list(kind=None):
+def db_list():
     with LK:
         x = DB.cursor()
-        if kind:
-            x.execute("SELECT id,kind,name,uid FROM acc "
-                      "WHERE kind=? ORDER BY id", (kind,))
-        else:
-            x.execute("SELECT id,kind,name,uid FROM acc ORDER BY id")
+        x.execute("SELECT id,name,uid FROM acc ORDER BY id")
         return x.fetchall()
 
 def db_get(i):
     with LK:
         x = DB.cursor()
-        x.execute("SELECT id,kind,name,bearer,appcheck,uid "
-                  "FROM acc WHERE id=?", (i,))
+        x.execute("SELECT id,name,bearer,appcheck,uid FROM acc WHERE id=?",
+                  (i,))
         return x.fetchone()
 
 def db_del(i):
@@ -128,9 +122,9 @@ def tg_ans(cbid, t=None):
     except Exception: pass
 
 # ============================================================
-# CASH BRO
+# REWARD BRO
 # ============================================================
-def cb_gem_headers(bearer, appcheck):
+def gem_hdr(bearer, appcheck):
     return {
         "host": "us-central1-cash-bro-8c96e.cloudfunctions.net",
         "authorization": f"Bearer {bearer}",
@@ -139,17 +133,17 @@ def cb_gem_headers(bearer, appcheck):
         "user-agent": "okhttp/5.2.1",
     }
 
-def cb_super_headers(bearer, appcheck):
-    h = cb_gem_headers(bearer, appcheck)
+def super_hdr(bearer, appcheck):
+    h = gem_hdr(bearer, appcheck)
     h["firebase-instance-id-token"] = INSTANCE_ID
     return h
 
-def cb_gem_payload():
+def gem_payload():
     return {"data": {"gems": {
         "@type": "type.googleapis.com/google.protobuf.Int64Value",
         "value": GEM_VALUE}, "isInstall": False}}
 
-def cb_super_payload():
+def super_payload():
     return {"data": {
         "gemsRequired": {
             "@type": "type.googleapis.com/google.protobuf.Int64Value",
@@ -158,106 +152,103 @@ def cb_super_payload():
             "@type": "type.googleapis.com/google.protobuf.Int64Value",
             "value": SUPER_VALUE}}}
 
-def cb_run_gems(acc, N):
-    _, kind, name, bearer, appcheck, uid = acc
+def run_gems(acc, N):
+    _, name, bearer, appcheck, uid = acc
     N(f"💎 claiming {GEM_VALUE} gems × {GEM_CLAIMS}")
     ok = 0
     for i in range(1, GEM_CLAIMS + 1):
         try:
-            r = requests.post(CB_GEM_URL,
-                headers=cb_gem_headers(bearer, appcheck),
-                json=cb_gem_payload(), verify=False, timeout=30)
-            code = r.status_code
-            txt = r.text[:120]
-            if code == 401:
+            r = requests.post(GEM_URL,
+                headers=gem_hdr(bearer, appcheck),
+                json=gem_payload(), verify=False, timeout=30)
+            if r.status_code == 401:
                 N("❌ token expired"); return 0
-            if code == 403:
+            if r.status_code == 403:
                 N("❌ appcheck rejected"); return 0
-            if code == 200:
+            if r.status_code == 200:
                 ok += 1
-                N(f"[{i}/{GEM_CLAIMS}] ✅")
+                N(f"[{i}/{GEM_CLAIMS}] ✅ 200")
             else:
-                N(f"[{i}/{GEM_CLAIMS}] {code} {txt}")
+                N(f"[{i}/{GEM_CLAIMS}] {r.status_code} {r.text[:80]}")
         except Exception as e:
             N(f"[{i}] 🚨 {e}")
         if i < GEM_CLAIMS:
-            time.sleep(CB_DELAY)
+            time.sleep(GEM_DELAY)
     N(f"✅ gems {ok}/{GEM_CLAIMS}")
     return ok
 
-def cb_run_super(acc, N):
-    _, kind, name, bearer, appcheck, uid = acc
-    N(f"⚡ claiming super offer ({SUPER_VALUE})")
+def run_super(acc, N):
+    _, name, bearer, appcheck, uid = acc
+    N(f"⚡ super offer ({SUPER_VALUE})")
     try:
-        r = requests.post(CB_SUPER_URL,
-            headers=cb_super_headers(bearer, appcheck),
-            json=cb_super_payload(), verify=False, timeout=30)
-        N(f"super: {r.status_code} | {r.text[:200]}")
+        r = requests.post(SUPER_URL,
+            headers=super_hdr(bearer, appcheck),
+            json=super_payload(), verify=False, timeout=30)
+        N(f"super → {r.status_code} | {r.text[:200]}")
     except Exception as e:
         N(f"🚨 super {e}")
 
-def cb_run_full(acc, N):
-    N("🚀 Cash Bro — full run")
-    cb_run_gems(acc, N)
-    time.sleep(CB_DELAY)
-    cb_run_super(acc, N)
+def run_full(acc, N):
+    N("🚀 full run")
+    run_gems(acc, N)
+    time.sleep(GEM_DELAY)
+    run_super(acc, N)
     N("🎯 done")
 
 # ============================================================
-# REWARD BRO
+# READ & EARN
 # ============================================================
-STOPS = set()   # account ids requested to stop
+STOPS = set()
 
-def rb_headers():
+def re_hdr():
     return {
         "user-agent": "Dart/3.11 (dart:io)",
         "content-type": "application/json",
-        "x-api-key": RB_API_KEY,
+        "x-api-key": RE_API_KEY,
         "accept-encoding": "gzip",
         "host": "app.rewardbro.in",
     }
 
-def rb_loop(acc, N):
+def re_loop(acc, N):
     aid = acc[0]
-    uid = acc[5]
-    N(f"📖 Read & Earn loop starting ({RB_DELAY}s)")
+    uid = acc[4]
+    N(f"📖 Read & Earn starting ({RE_DELAY}s interval)")
     count = 0
     while aid not in STOPS:
         count += 1
         try:
             body = json.dumps({"appName": "rewardbro", "userId": uid})
             r = requests.request("GET",
-                f"{RB_BASE}/get-read-earn-url",
-                headers=rb_headers(), data=body,
+                f"{RE_BASE}/get-read-earn-url",
+                headers=re_hdr(), data=body,
                 verify=False, timeout=30)
             if r.status_code != 200:
-                N(f"[{count}] ❌ fetch {r.status_code} {r.text[:100]}")
-                time.sleep(RB_DELAY); continue
+                N(f"[{count}] ❌ fetch {r.status_code} {r.text[:80]}")
+                time.sleep(RE_DELAY); continue
             data = r.json()
             if not data.get("success"):
                 N(f"[{count}] ❌ {data.get('message')}")
-                time.sleep(RB_DELAY); continue
+                time.sleep(RE_DELAY); continue
             oid = data.get("offerId")
             coins = data.get("coins")
             lim = data.get("limits")
             done = data.get("completedCount")
             N(f"[{count}] 📥 offer={oid} coins={coins} {done}/{lim}")
             if lim is not None and done is not None and done >= lim:
-                N(f"🏁 limit reached — stopping"); return
-            # wait then postback
-            for _ in range(RB_DELAY):
+                N("🏁 limit reached — stopping"); return
+            for _ in range(RE_DELAY):
                 if aid in STOPS: return
                 time.sleep(1)
             pb = requests.get(
-                f"{RB_BASE}/read-earn-postback",
-                headers=rb_headers(),
+                f"{RE_BASE}/read-earn-postback",
+                headers=re_hdr(),
                 params={"appName": "rewardbro",
                         "userId": uid, "offerId": oid},
                 verify=False, timeout=30)
             N(f"[{count}] 📤 {pb.status_code} {pb.text[:120]}")
         except Exception as e:
             N(f"[{count}] 🚨 {e}")
-        for _ in range(RB_DELAY):
+        for _ in range(RE_DELAY):
             if aid in STOPS: return
             time.sleep(1)
     N("🛑 stopped")
@@ -288,31 +279,27 @@ def spawn(i, fn, *a):
 # ============================================================
 def kb_main():
     rows = []
-    for i, k, n, u in db_list():
+    for i, n, u in db_list():
         pre = "🟢 " if running(i) else ""
-        tag = "⚡" if k == "cashbro" else "📖"
-        rows.append([{"text": f"{pre}{tag} #{i} {n}",
+        rows.append([{"text": f"{pre}#{i} {n}",
                       "callback_data": f"a:{i}"}])
-    rows.append([{"text": "➕ Add Cash Bro", "callback_data": "addcb"}])
-    rows.append([{"text": "➕ Add Reward Bro", "callback_data": "addrb"}])
+    rows.append([{"text": "➕ Add Account", "callback_data": "add"}])
     rows.append([{"text": "🔄 Refresh", "callback_data": "home"}])
     return {"inline_keyboard": rows}
 
-def kb_cb(i):
-    return {"inline_keyboard": [
-        [{"text": "🚀 Run Full", "callback_data": f"cf:{i}"}],
-        [{"text": "💎 Gems Only", "callback_data": f"cg:{i}"}],
-        [{"text": "⚡ Super Only", "callback_data": f"cs:{i}"}],
-        [{"text": "🗑 Remove", "callback_data": f"x:{i}"}],
-        [{"text": "◀️ Back", "callback_data": "home"}],
-    ]}
-
-def kb_rb(i):
+def kb_acc(i):
     rows = []
     if running(i):
         rows.append([{"text": "⏹ Stop", "callback_data": f"st:{i}"}])
     else:
-        rows.append([{"text": "▶️ Start Loop", "callback_data": f"rs:{i}"}])
+        rows.append([{"text": "🚀 Run Full",
+                      "callback_data": f"cf:{i}"}])
+        rows.append([{"text": "💎 Gems Only",
+                      "callback_data": f"cg:{i}"}])
+        rows.append([{"text": "⚡ Super Only",
+                      "callback_data": f"cs:{i}"}])
+        rows.append([{"text": "📖 Read & Earn",
+                      "callback_data": f"rs:{i}"}])
     rows.append([{"text": "🗑 Remove", "callback_data": f"x:{i}"}])
     rows.append([{"text": "◀️ Back", "callback_data": "home"}])
     return {"inline_keyboard": rows}
@@ -328,35 +315,28 @@ def kb_rm(i):
 # ============================================================
 def menu_text():
     accs = db_list()
-    L = [f"*Multi Tool Bot v{VERSION}*",
+    L = [f"*Reward Bro Bot v{VERSION}*",
          f"Accounts: *{len(accs)}*", ""]
     if not accs:
         L.append("_No accounts. Tap ➕ Add._")
     else:
-        for i, k, n, u in accs:
+        for i, n, u in accs:
             pre = "🟢" if running(i) else "⚪"
-            tag = "⚡" if k == "cashbro" else "📖"
-            L.append(f"{pre} {tag} *#{i}* {n}")
+            L.append(f"{pre} *#{i}* {n}")
     return "\n".join(L)
 
 def acc_text(i):
     a = db_get(i)
     if not a: return "_not found_"
-    _, kind, name, bearer, appcheck, uid = a
+    _, name, bearer, appcheck, uid = a
     r = "🟢 running" if running(i) else "⚪ idle"
-    if kind == "cashbro":
-        tok = (bearer[:20] + "…") if bearer else "—"
-        ck = (appcheck[:20] + "…") if appcheck else "—"
-        return (f"*⚡ Cash Bro #{i}*\n"
-                f"name: {name}\n"
-                f"status: {r}\n\n"
-                f"bearer: `{tok}`\n"
-                f"appcheck: `{ck}`")
-    else:
-        return (f"*📖 Reward Bro #{i}*\n"
-                f"name: {name}\n"
-                f"status: {r}\n\n"
-                f"userId: `{uid}`")
+    tok = (bearer[:18] + "…") if bearer else "—"
+    ck = (appcheck[:18] + "…") if appcheck else "—"
+    return (f"*Reward Bro #{i} — {name}*\n"
+            f"status: {r}\n\n"
+            f"userId: `{uid}`\n"
+            f"bearer: `{tok}`\n"
+            f"appcheck: `{ck}`")
 
 # ============================================================
 # CALLBACKS
@@ -370,28 +350,17 @@ def cb(c):
     if d == "home":
         tg_ans(cid)
         tg_edit(chat, mid, menu_text(), kb_main())
-    elif d == "addcb":
+    elif d == "add":
         tg_ans(cid)
-        kv_set(f"aw:{chat}", "addcb")
+        kv_set(f"aw:{chat}", "add")
         tg_edit(chat, mid,
-            "*Add Cash Bro*\n\nSend 2 lines:\n"
-            "`bearer`\n`appcheck`\n\nor /cancel",
-            {"inline_keyboard":
-                [[{"text": "❌ Cancel", "callback_data": "home"}]]})
-    elif d == "addrb":
-        tg_ans(cid)
-        kv_set(f"aw:{chat}", "addrb")
-        tg_edit(chat, mid,
-            "*Add Reward Bro*\n\nSend user ID:\n`12345`\n\nor /cancel",
+            "*Add Reward Bro*\n\nSend 3 lines:\n"
+            "`bearer`\n`appcheck`\n`userId`\n\nor /cancel",
             {"inline_keyboard":
                 [[{"text": "❌ Cancel", "callback_data": "home"}]]})
     elif d.startswith("a:"):
         i = int(d.split(":")[1]); tg_ans(cid)
-        a = db_get(i)
-        if not a:
-            tg_edit(chat, mid, "_gone_", kb_main()); return
-        kb = kb_cb(i) if a[1] == "cashbro" else kb_rb(i)
-        tg_edit(chat, mid, acc_text(i), kb)
+        tg_edit(chat, mid, acc_text(i), kb_acc(i))
     elif d.startswith("x:"):
         i = int(d.split(":")[1]); tg_ans(cid)
         tg_edit(chat, mid, f"Remove *#{i}*?", kb_rm(i))
@@ -404,31 +373,35 @@ def cb(c):
     elif d.startswith("cf:"):
         i = int(d.split(":")[1]); tg_ans(cid, "…")
         a = db_get(i)
-        if not a: return
-        def N(m): tg_send(chat, f"*CB#{i}* {m}")
-        spawn(i, cb_run_full, a, N)
+        if a:
+            def N(m): tg_send(chat, f"*#{i}* {m}")
+            spawn(i, run_full, a, N)
+            tg_send(chat, f"*#{i}* 🚀 full run", kb_acc(i))
     elif d.startswith("cg:"):
         i = int(d.split(":")[1]); tg_ans(cid, "…")
         a = db_get(i)
-        if not a: return
-        def N(m): tg_send(chat, f"*CB#{i}* {m}")
-        spawn(i, cb_run_gems, a, N)
+        if a:
+            def N(m): tg_send(chat, f"*#{i}* {m}")
+            spawn(i, run_gems, a, N)
+            tg_send(chat, f"*#{i}* 💎 gems", kb_acc(i))
     elif d.startswith("cs:"):
         i = int(d.split(":")[1]); tg_ans(cid, "…")
         a = db_get(i)
-        if not a: return
-        def N(m): tg_send(chat, f"*CB#{i}* {m}")
-        spawn(i, cb_run_super, a, N)
+        if a:
+            def N(m): tg_send(chat, f"*#{i}* {m}")
+            spawn(i, run_super, a, N)
+            tg_send(chat, f"*#{i}* ⚡ super", kb_acc(i))
     elif d.startswith("rs:"):
         i = int(d.split(":")[1]); tg_ans(cid, "…")
         a = db_get(i)
-        if not a: return
-        def N(m): tg_send(chat, f"*RB#{i}* {m}")
-        spawn(i, rb_loop, a, N)
+        if a:
+            def N(m): tg_send(chat, f"*#{i}* {m}")
+            spawn(i, re_loop, a, N)
+            tg_send(chat, f"*#{i}* 📖 read&earn", kb_acc(i))
     elif d.startswith("st:"):
         i = int(d.split(":")[1]); tg_ans(cid, "stopping…")
         STOPS.add(i)
-        tg_send(chat, f"*RB#{i}* ⏹ stop requested")
+        tg_send(chat, f"*#{i}* ⏹ stop", kb_acc(i))
     else:
         tg_ans(cid)
 
@@ -441,43 +414,34 @@ def msg(m):
     if t == "/cancel":
         kv_set(f"aw:{chat}", "")
         tg_send(chat, "Cancelled", kb_main()); return
-    aw = kv_get(f"aw:{chat}")
-    if aw == "addcb":
+    if kv_get(f"aw:{chat}") == "add":
         lines = [x.strip() for x in t.splitlines() if x.strip()]
-        if len(lines) < 2:
-            tg_send(chat, "Send 2 lines:\n`bearer`\n`appcheck`"); return
-        bearer, appcheck = lines[0].replace("Bearer ", ""), lines[1]
-        n = len(db_list("cashbro")) + 1
-        name = f"CB{n}"
-        new = db_add("cashbro", name, bearer, appcheck)
-        kv_set(f"aw:{chat}", "")
-        tg_send(chat, f"✅ *{name}* added (#{new})", kb_main())
-        return
-    if aw == "addrb":
-        if not t:
-            tg_send(chat, "Send user ID"); return
-        n = len(db_list("rewardbro")) + 1
+        if len(lines) < 3:
+            tg_send(chat, "Need 3 lines:\n`bearer`\n`appcheck`\n`uid`")
+            return
+        bearer = lines[0].replace("Bearer ", "")
+        appcheck = lines[1]
+        uid = lines[2]
+        n = len(db_list()) + 1
         name = f"RB{n}"
-        new = db_add("rewardbro", name, uid=t)
+        new = db_add(name, bearer, appcheck, uid)
         kv_set(f"aw:{chat}", "")
         tg_send(chat, f"✅ *{name}* added (#{new})", kb_main())
         return
     if t.startswith("/start") or t.startswith("/menu"):
         tg_send(chat, menu_text(), kb_main()); return
-    if t.startswith("/addcb"):
-        kv_set(f"aw:{chat}", "addcb")
-        tg_send(chat, "Send 2 lines:\n`bearer`\n`appcheck`"); return
-    if t.startswith("/addrb"):
-        kv_set(f"aw:{chat}", "addrb")
-        tg_send(chat, "Send user ID:"); return
+    if t.startswith("/add"):
+        kv_set(f"aw:{chat}", "add")
+        tg_send(chat, "Send 3 lines:\n`bearer`\n`appcheck`\n`userId`")
+        return
     tg_send(chat, "Use /start", kb_main())
 
 # ============================================================
-# POLL
+# POLL LOOP — retries forever
 # ============================================================
 def poll():
     off = 0
-    log("poll start")
+    log("poll thread started")
     while True:
         try:
             r = requests.get(f"{TG_API}/getUpdates",
@@ -500,32 +464,49 @@ def poll():
         except requests.exceptions.ReadTimeout:
             continue
         except Exception as e:
-            log("poll", e); time.sleep(3)
+            log("poll err", e); time.sleep(3)
+
+def tg_boot():
+    """Runs forever. Restarts poll if it ever crashes."""
+    while True:
+        try:
+            if CHAT_ID:
+                tg_send(CHAT_ID, f"🚀 Reward Bro Bot v{VERSION} online")
+            poll()
+        except Exception as e:
+            log("tg_boot crashed, retry in 10s:", e)
+            time.sleep(10)
 
 # ============================================================
-# FLASK
+# FLASK — main thread, keeps Render URL alive
 # ============================================================
 app = Flask(__name__)
 
 @app.route("/")
-def root():
-    return jsonify({"ok": True, "v": VERSION,
-        "accounts": len(db_list()),
-        "time": datetime.utcnow().isoformat() + "Z"})
+def index():
+    return "Active", 200
 
 @app.route("/health")
 def health():
-    return "ok", 200
+    return "Active", 200
 
-def boot():
-    if not BOT_TOKEN:
-        log("⚠️ no BOT_TOKEN"); return
-    threading.Thread(target=poll, daemon=True).start()
-    if CHAT_ID:
-        tg_send(CHAT_ID, f"🚀 Multi Tool Bot v{VERSION} started")
-    log("boot ok db=", DB_PATH)
+@app.route("/status")
+def status():
+    return jsonify({
+        "ok": True,
+        "version": VERSION,
+        "accounts": len(db_list()),
+        "uptime_sec": int(time.time() - START_TIME),
+        "time": datetime.utcnow().isoformat() + "Z"
+    })
 
-boot()
+@app.route("/stop")
+def stop():
+    os._exit(1)
 
+# ============================================================
+# ENTRY
+# ============================================================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=PORT)
+    threading.Thread(target=tg_boot, daemon=True).start()
+    app.run(host="0.0.0.0", port=PORT, threaded=True)

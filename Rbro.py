@@ -9,7 +9,7 @@ PORT      = int(os.environ.get("PORT", "10000"))
 DB_PATH   = os.environ.get("DB_PATH", "/data/accounts.db")
 if not os.path.isdir(os.path.dirname(DB_PATH)): DB_PATH = "accounts.db"
 TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
-VER = "1.2.0"; T0 = time.time()
+VER = "1.2.1"; T0 = time.time()
 
 GEM_URL   = "https://us-central1-cash-bro-8c96e.cloudfunctions.net/claimGems"
 SUPER_URL = "https://us-central1-cash-bro-8c96e.cloudfunctions.net/claimSuperOffer"
@@ -17,7 +17,7 @@ GEM_V, GEM_N, SUPER_V, GEM_D = "10", 20, "200", 2
 INSTANCE = "c83aRHv6QD6dgvLIVax39r:APA91bEpVaezbqZEx5L-qi8LgyiVQ8pD_s8c1iFcuYCLH0CXTvVeimRT3owoNKIEvfB2vAw1yHsQBdrFnExDU-q6ksGxKzFqr_lRdQhaJHTCx9XM7zYbdGY"
 RE_BASE, RE_KEY, RE_D = "https://app.rewardbro.in", "rb_live_9f3c7a21d8b64e5ab4c2f1e98d6a73c5f0b", 15
 STOP_W = ("daily limit","limit reached","limit exceed","limit crossed","no more offer",
-          "no offers","completed all","all offers completed","quota","try again tomorrow","429")
+          "no offers","completed all","all offers completed","quota","try again tomorrow")
 MAX_FAIL = 3
 
 log = lambda *a: print(f"[{datetime.utcnow():%H:%M:%S}]", *a, flush=True)
@@ -65,13 +65,17 @@ def kv_get(k, d=None):
 def tg_send(c, t, kb=None):
     d = {"chat_id": c, "text": t, "parse_mode": "HTML", "disable_web_page_preview": True}
     if kb: d["reply_markup"] = json.dumps(kb)
-    try: requests.post(f"{TG}/sendMessage", data=d, timeout=15)
+    try:
+        r = requests.post(f"{TG}/sendMessage", data=d, timeout=15)
+        if r.status_code != 200: log("send", r.status_code, r.text[:150])
     except Exception as e: log("send", e)
 def tg_edit(c, m, t, kb=None):
     d = {"chat_id": c, "message_id": m, "text": t, "parse_mode": "HTML", "disable_web_page_preview": True}
     if kb: d["reply_markup"] = json.dumps(kb)
-    try: requests.post(f"{TG}/editMessageText", data=d, timeout=15)
-    except: pass
+    try:
+        r = requests.post(f"{TG}/editMessageText", data=d, timeout=15)
+        if r.status_code != 200 and "not modified" not in r.text: log("edit", r.status_code, r.text[:150])
+    except Exception as e: log("edit", e)
 def tg_ans(cb, t=None):
     d = {"callback_query_id": cb}
     if t: d["text"] = t
@@ -275,11 +279,13 @@ def cb(c):
         _, kind, i = d.split(":"); i = int(i); tg_ans(cid, "starting…")
         a = db_get(i)
         if not a: return
-        fn = {"full": run_full, "g": run_gems, "s": run_super, "rd": re_loop}.get(kind)
         t = a[1]
+        want = {"full": "gs", "g": "gs", "s": "gs", "rd": "rd"}.get(kind)
+        if t != want: return
+        fn = {"full": run_full, "g": run_gems, "s": run_super, "rd": re_loop}.get(kind)
         def N(m, _i=i): tg_send(chat, f"<b>#{_i}</b> {m}")
         if fn and spawn(i, fn, a, N):
-            tg_send(chat, f"<b>#{i}</b> {'🚀 ' + kind} started", kb_acc(i, t))
+            tg_send(chat, f"<b>#{i}</b> 🚀 {kind} started", kb_acc(i, t))
         else: tg_send(chat, f"<b>#{i}</b> already running")
     elif d.startswith("st:"):
         i = int(d.split(":")[1]); tg_ans(cid, "stopping…")
@@ -327,9 +333,11 @@ def boot():
 
 # ---------- FLASK ----------
 app = Flask(__name__)
-@app.route("/"); 
+
+@app.route("/")
 @app.route("/health")
 def idx(): return "Active", 200
+
 @app.route("/status")
 def st(): return jsonify({"ok":True,"ver":VER,"gs":len(db_list("gs")),"rd":len(db_list("rd")),"up":int(time.time()-T0)})
 

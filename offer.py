@@ -17,7 +17,7 @@ DBP=os.environ.get("DB_PATH","/data/accounts.db")
 if not os.path.isdir(os.path.dirname(DBP)):DBP="accounts.db"
 BASE="https://api.offerplay.in"
 TG=f"https://api.telegram.org/bot{BOT}"
-V="2.1.0"
+V="2.3.0"
 BR,MD,AV,BUILD="iQOO","I2301","15","AP3A.240905.015.A2"
 GS,GA,AW,IW,UW,CG=35,5,20,35,130,3
 INST={2:("com.vedantu.app","Vedantu"),5:("com.phonepe.app","PhonePe"),
@@ -75,21 +75,21 @@ def GF(t,h,p):return requests.get(BASE+p,headers=HF(t,h),timeout=30).json()
 def PF(t,h,p,b):return requests.post(BASE+p,headers=HF(t,h),json=b,timeout=30).json()
 def PM(t,h,p,b):return requests.post(BASE+p,headers=HM(t,h),json=b,timeout=30).json()
 
-def TG_send(m,d):
+def TGs(m,d):
     try:requests.post(f"{TG}/{m}",data=d,timeout=15)
     except:pass
 def tgs(c,t,kb=None):
     d={"chat_id":c,"text":t,"parse_mode":"Markdown"}
     if kb:d["reply_markup"]=json.dumps(kb)
-    TG_send("sendMessage",d)
+    TGs("sendMessage",d)
 def tge(c,m,t,kb=None):
     d={"chat_id":c,"message_id":m,"text":t,"parse_mode":"Markdown"}
     if kb:d["reply_markup"]=json.dumps(kb)
-    TG_send("editMessageText",d)
+    TGs("editMessageText",d)
 def tga(cb,t=None):
     d={"callback_query_id":cb}
     if t:d["text"]=t
-    TG_send("answerCallbackQuery",d)
+    TGs("answerCallbackQuery",d)
 
 class Stop(Exception):pass
 JOB,JLK={},threading.Lock()
@@ -175,9 +175,16 @@ def fu(t,h,tt,i,N=None):
             gap(5,"backoff",N,i)
         else:z=0
 
-def attempt(acc,i,N=None):
+def attempt(acc,i,N=None,target=None):
     _,n,t,u,h=acc;ck(i)
     s=st(t,h);ip=s.get("inProgressAttempt");an=s["attemptNumber"]
+    if target is not None:
+        if ip is None and an!=target:
+            if N:N(f"❌ server at stage {an}, you asked stage {target}")
+            return False
+        if ip is not None and an!=target:
+            if N:N(f"⚠️ resuming stage {an} (server), ignoring #{target}")
+        if N:N(f"🎯 target stage {target}")
     def ins_for(k):
         for r in s.get("ladder",[]):
             if r["stage"]==k:return bool(r["install"])
@@ -189,12 +196,11 @@ def attempt(acc,i,N=None):
             cd=ims(s.get("cooldownEndsAt"))
             if cd and cd>time.time():
                 w=int(cd-time.time())+2
-                if N:N(f"🛏 {w}s")
-                e=time.time()+w
-                while time.time()<e:ck(i);time.sleep(min(1,max(.1,e-time.time())))
+                if N:N(f"🛏 cooldown {w}s — try later")
+                return False
             s=st(t,h)
             if not s["canEnter"]:
-                if N:N("❌ no enter")
+                if N:N("❌ cannot enter")
                 return False
         if s["currentGemBalance"]<s["gemsCost"]:fu(t,h,s["gemsCost"],i,N)
         events(t,h,[{"eventType":"cta_click","screen":"landing","target":"start","attemptNumber":an,"sessionId":ses,"occurredAt":ms()}])
@@ -246,40 +252,29 @@ def attempt(acc,i,N=None):
         state="used"
     gap(CG,"claim",N,i)
     r=claim(t,h,a,u);d=r.get("data") or {}
-    if N:N(f"✅ coins={d.get('coins_awarded')} bal={d.get('new_coin_balance')}")
+    if N:N(f"✅ coins={d.get('coins_awarded')} bal={d.get('new_coin_balance')} cd={d.get('cooldown_hours')}h")
     events(t,h,[{"eventType":"complete","screen":"detail","attemptId":a,"value":d.get("coins_awarded",0),"sessionId":ses,"occurredAt":ms()}])
     return True
 
-def gnext(ch,i):
+def go_stage(ch,i,n):
     a=dbgt(i)
     if not a:return tgs(ch,"not found")
     def N(m):tgs(ch,f"*#{i}* {m}")
     def j():
-        tgs(ch,f"*#{i}* ▶️")
-        try:ok=attempt(a,i,N);tgs(ch,f"*#{i}* {'✅' if ok else '❌'}",kac(i))
-        except Stop:tgs(ch,f"*#{i}* 🛑",kac(i))
+        tgs(ch,f"*#{i}* ▶️ stage {n}…")
+        try:ok=attempt(a,i,N,target=n);tgs(ch,f"*#{i}* stage {n} {'✅' if ok else '❌'}",kstg(i))
+        except Stop:tgs(ch,f"*#{i}* 🛑",kstg(i))
         except Exception as e:tgs(ch,f"*#{i}* 💥 {e}")
-    if not sp(i,j):tgs(ch,f"*#{i}* busy")
-def gall(ch,i):
-    a=dbgt(i)
-    if not a:return tgs(ch,"not found")
-    def N(m):tgs(ch,f"*#{i}* {m}")
-    def j():
-        tgs(ch,f"*#{i}* 🏁")
-        while True:
-            ck(i);s=st(a[2],a[4])
-            if s.get("weekComplete") or s["attemptNumber"]>20:tgs(ch,f"*#{i}* 🎉");return
-            if not attempt(a,i,N):tgs(ch,f"*#{i}* ❌");return
-            gap(2,"next",None,i)
-    if not sp(i,j):tgs(ch,f"*#{i}* busy")
+    if not sp(i,j):tgs(ch,f"*#{i}* busy — tap STOP first")
+
 def gfarm(ch,i):
     a=dbgt(i)
     if not a:return tgs(ch,"not found")
     def N(m):tgs(ch,f"*#{i}* {m}")
     def j():
         tgs(ch,f"*#{i}* 💰")
-        try:b=fu(a[2],a[4],999,i,N);tgs(ch,f"*#{i}* bal={b}",kac(i))
-        except Stop:tgs(ch,f"*#{i}* 🛑",kac(i))
+        try:b=fu(a[2],a[4],999,i,N);tgs(ch,f"*#{i}* bal={b}",kstg(i))
+        except Stop:tgs(ch,f"*#{i}* 🛑",kstg(i))
         except Exception as e:tgs(ch,f"*#{i}* 💥 {e}")
     if not sp(i,j):tgs(ch,f"*#{i}* busy")
 
@@ -287,24 +282,50 @@ def km():
     r=[[{"text":("🟢 " if run(i) else "")+n,"callback_data":f"a:{i}"}] for i,n,u in dbls()]
     r+=[[{"text":"➕ Add","callback_data":"add"}],[{"text":"🔄","callback_data":"home"}]]
     return{"inline_keyboard":r}
-def kac(i):
-    r=[]
-    if run(i):r.append([{"text":"🛑 STOP","callback_data":f"st:{i}"}])
-    r+=[[{"text":"📊","callback_data":f"s:{i}"}],[{"text":"▶️ Next","callback_data":f"n:{i}"}],[{"text":"🏁 All","callback_data":f"r:{i}"}],[{"text":"💰 Farm","callback_data":f"f:{i}"}],[{"text":"🗑","callback_data":f"x:{i}"}],[{"text":"◀️","callback_data":"home"}]]
-    return{"inline_keyboard":r}
+
+def kstg(i):
+    a=dbgt(i)
+    cur=None
+    try:
+        if a:cur=st(a[2],a[4])["attemptNumber"]
+    except:pass
+    rows=[]
+    line=[]
+    for n in range(1,21):
+        mark=""
+        if cur is not None:
+            if n<cur:mark="✅ "
+            elif n==cur:mark="▶️ "
+        line.append({"text":f"{mark}{n}","callback_data":f"sg:{i}:{n}"})
+        if len(line)==5:rows.append(line);line=[]
+    if line:rows.append(line)
+    top=[]
+    if run(i):top.append([{"text":"🛑 STOP","callback_data":f"st:{i}"}])
+    top.append([{"text":"💰 Farm gems","callback_data":f"f:{i}"}])
+    top.append([{"text":"📊 Status","callback_data":f"s:{i}"}])
+    top.append([{"text":"🗑 Remove","callback_data":f"x:{i}"}])
+    return{"inline_keyboard":top+rows+[[{"text":"◀️ Back","callback_data":"home"}]]}
+
 def krm(i):return{"inline_keyboard":[[{"text":"✅","callback_data":f"y:{i}"}],[{"text":"❌","callback_data":f"a:{i}"}]]}
+
 def mt():
-    a=dbls();L=[f"*OP v{V}*",f"*{len(a)}*",""]
+    a=dbls();L=[f"*OP v{V}*","",f"*{len(a)}* accounts",""]
     if not a:L.append("_none_")
     else:
-        for i,n,u in a:L.append(f"*#{i}* `{(u or '')[:12]}…`{' 🟢' if run(i) else ''}")
+        for i,n,u in a:
+            cur="?"
+            try:cur=st(dbgt(i)[2],dbgt(i)[4])["attemptNumber"]
+            except:pass
+            L.append(f"*#{i}* `{(u or '')[:12]}…` stage {cur}/20{' 🟢' if run(i) else ''}")
     return"\n".join(L)
+
 def atx(i):
     a=dbgt(i)
     if not a:return"_nf_"
     _,n,t,u,h=a;d=jd(t)
     try:
-        s=st(t,h);sg=s["attemptNumber"];g=s["currentGemBalance"];ce=s["canEnter"];cd=s.get("cooldownEndsAt") or "—";ip=s.get("inProgressAttempt")
+        s=st(t,h);sg=s["attemptNumber"];g=s["currentGemBalance"];ce=s["canEnter"]
+        cd=s.get("cooldownEndsAt") or "—";ip=s.get("inProgressAttempt")
         ipt=f"`{ip['status']}` id={ip['id']}" if ip else "—"
     except:sg=g="?";ce=False;cd="err";ipt="—"
     return(f"*#{i} {n}*\nuid:`{u}`\nfp:`dev_{h}|{BR}|{MD}|{AV}`\ntok:{d:.1f}d\nst:{'🟢' if run(i) else '⚪'}\nstage:{sg}/20\ngems:{g}\nenter:{ce}\ncd:{cd}\nip:{ipt}")
@@ -313,20 +334,23 @@ def cb(c):
     ci=c["id"];ch=c["message"]["chat"]["id"];mi=c["message"]["message_id"];d=c.get("data","")
     if d=="home":tga(ci);tge(ch,mi,mt(),km())
     elif d=="add":tga(ci);kvs(f"aw:{ch}","add");tge(ch,mi,"Paste bearer (`eyJ...`).\n/cancel",{"inline_keyboard":[[{"text":"❌","callback_data":"home"}]]})
-    elif d.startswith("a:"):i=int(d[2:]);tga(ci);tge(ch,mi,atx(i),kac(i))
-    elif d.startswith("s:"):i=int(d[2:]);tga(ci,"…");tge(ch,mi,atx(i),kac(i))
+    elif d.startswith("a:"):i=int(d[2:]);tga(ci);tge(ch,mi,atx(i),kstg(i))
+    elif d.startswith("s:"):i=int(d[2:]);tga(ci,"…");tge(ch,mi,atx(i),kstg(i))
     elif d.startswith("st:"):
         i=int(d[3:])
-        if run(i):rst(i);tga(ci,"🛑")
-        else:tga(ci,"no")
-        time.sleep(.4);tge(ch,mi,atx(i),kac(i))
+        if run(i):rst(i);tga(ci,"🛑 stopping")
+        else:tga(ci,"idle")
+        time.sleep(.4);tge(ch,mi,atx(i),kstg(i))
     elif d.startswith("x:"):i=int(d[2:]);tga(ci);tge(ch,mi,f"Remove #{i}?",krm(i))
     elif d.startswith("y:"):
         i=int(d[2:])
         if run(i):rst(i)
         tga(ci,"rm" if dbdel(i) else "no");tge(ch,mi,mt(),km())
-    elif d.startswith("n:"):i=int(d[2:]);tga(ci,"…");gnext(ch,i)
-    elif d.startswith("r:"):i=int(d[2:]);tga(ci,"…");gall(ch,i)
+    elif d.startswith("sg:"):
+        _,si,sn=d.split(":")
+        i=int(si);n=int(sn)
+        tga(ci,f"stage {n}")
+        go_stage(ch,i,n)
     elif d.startswith("f:"):i=int(d[2:]);tga(ci,"…");gfarm(ch,i)
     else:tga(ci)
 
@@ -337,7 +361,7 @@ def msg(m):
         p=t.split()
         if len(p)==2 and p[1].isdigit():
             i=int(p[1])
-            if run(i):rst(i);return tgs(ch,f"🛑 #{i}",kac(i))
+            if run(i):rst(i);return tgs(ch,f"🛑 #{i}",kstg(i))
             return tgs(ch,f"#{i} idle")
         nn=0
         for i,_,_ in dbls():

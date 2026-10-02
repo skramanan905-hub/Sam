@@ -1,624 +1,401 @@
-import os, json, time, base64, sqlite3, threading
-import traceback, requests
+import os,json,time,base64,sqlite3,threading,secrets,random,traceback
+import requests
 from datetime import datetime
-from flask import Flask, jsonify
+from flask import Flask,jsonify
 
-# ============ HARDCODED ============
-BOT_TOKEN = "8817040407:AAHxM7D7l5Cc7yuIZvpaeS7guyIzQic9fQI"
-CHAT_ID   = "1827265590"
-# ===================================
+ACC=[
+("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJjbXVvNnNnMmhndDgxNDFpYTB3OWJoOTc3IiwiaWF0IjoxNzkwODY4ODEwLCJleHAiOjE3OTM0NjA4MTB9.y0yPgEvJumYFfVrCx0sZ1Gs38NUEXhsrLy2sA3ov7-0","25e2ce4f51201ace","Account 1"),
+("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJjbXVvNnc5MjlndnJ4NDFpYWVxOTMxcmlpIiwiaWF0IjoxNzkwODY4OTA3LCJleHAiOjE3OTM0NjA5MDd9.AjHoji0qPTDOUH4jnC17tRajWQRtkeKD8rBijPEknMg","4ab7cfe2bbb09015","Account 2"),
+("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJjbXVvNzA2bHdneTRkNDFpYW05YjBlbmR6IiwiaWF0IjoxNzkwODY5MDA1LCJleHAiOjE3OTM0NjEwMDV9.vCdy3XlTXsfiPr4CLrgPa91NCa86Ae02wo_ykv9QnFg","43c6c40ce8eb1ead","Account 3"),
+("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJjbXVvNzMwcWpnenptNDFpYTllZnZya3NzIiwiaWF0IjoxNzkwODY5MTQ2LCJleHAiOjE3OTM0NjExNDZ9.b6a6sOQRthj9TtxB9eVSxZxaiplAEgFhWLAKse2xpf0","012dcdac07908378","Account 4"),
+("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJjbXMwbWNjcWMzcDhuYmF5ZW1semVneGk2IiwiaWF0IjoxNzkwNjg4NDY5LCJleHAiOjE3OTMyODA0Njl9.tJ4inhpi1T2t9sJ7mIWxQyJphuo5ztz8rR_tkTz35o4","b519212b9bd0f528","Account 5")]
 
-PORT    = int(os.environ.get("PORT", "10000"))
-DB_PATH = os.environ.get("DB_PATH", "/data/accounts.db")
-if not os.path.isdir(os.path.dirname(DB_PATH)):
-    DB_PATH = "accounts.db"
-BASE = "https://api.offerplay.in"
-TG_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+BOT="8817040407:AAHxM7D7l5Cc7yuIZvpaeS7guyIzQic9fQI"
+CHAT="1827265590"
+PORT=int(os.environ.get("PORT","10000"))
+DBP=os.environ.get("DB_PATH","/data/accounts.db")
+if not os.path.isdir(os.path.dirname(DBP)):DBP="accounts.db"
+BASE="https://api.offerplay.in"
+TG=f"https://api.telegram.org/bot{BOT}"
+V="2.1.0"
+BR,MD,AV,BUILD="iQOO","I2301","15","AP3A.240905.015.A2"
+GS,GA,AW,IW,UW,CG=35,5,20,35,130,3
+INST={2:("com.vedantu.app","Vedantu"),5:("com.phonepe.app","PhonePe"),
+      8:("in.swiggy.android","Swiggy"),12:("com.flipkart.android","Flipkart"),
+      15:("com.myntra.android","Myntra"),18:("net.one97.paytm","Paytm")}
 
-VERSION = "1.0.17"
-START_TIME = time.time()
+DB=sqlite3.connect(DBP,check_same_thread=False)
+LK=threading.Lock()
+DB.execute("CREATE TABLE IF NOT EXISTS accounts(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,token TEXT UNIQUE,uid TEXT,hx TEXT,at TEXT)")
+DB.execute("CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY,v TEXT)")
+DB.commit()
 
-# ---- timing (seconds) ----
-G_SURV = 35; G_AFTER = 5; AD_W = 20
-I_W = 30; U_W = 125; C_GAP = 3; MARG = 5
-
-INSTALL = {
-    2:  ("com.vedantu.app", "Vedantu"),
-    5:  ("com.phonepe.app", "PhonePe"),
-    8:  ("in.swiggy.android", "Swiggy"),
-    12: ("com.flipkart.android", "Flipkart"),
-    15: ("com.myntra.android", "Myntra"),
-    18: ("net.one97.paytm", "Paytm"),
-}
-
-def log(*a):
-    print(f"[{datetime.utcnow():%H:%M:%S}]", *a, flush=True)
-
-# ============================================================
-# DB
-# ============================================================
-def db_init():
-    c = sqlite3.connect(DB_PATH, check_same_thread=False)
-    x = c.cursor()
-    x.execute("""CREATE TABLE IF NOT EXISTS accounts(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT, token TEXT UNIQUE, uid TEXT, at TEXT)""")
-    x.execute("""CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT)""")
-    c.commit()
-    return c
-
-DB = db_init()
-LK = threading.Lock()
-
-def db_add(name, tok):
-    uid = jwt_uid(tok)
-    with LK:
-        x = DB.cursor()
-        try:
-            x.execute("INSERT INTO accounts(name,token,uid,at)VALUES(?,?,?,?)",
-                (name, tok, uid, datetime.utcnow().isoformat()))
-            DB.commit()
-            return x.lastrowid
-        except sqlite3.IntegrityError:
-            return None
-
-def db_list():
-    with LK:
-        x = DB.cursor()
-        x.execute("SELECT id,name,uid FROM accounts ORDER BY id")
-        return x.fetchall()
-
-def db_get(i):
-    with LK:
-        x = DB.cursor()
-        x.execute("SELECT id,name,token,uid FROM accounts WHERE id=?", (i,))
-        return x.fetchone()
-
-def db_del(i):
-    with LK:
-        x = DB.cursor()
-        x.execute("DELETE FROM accounts WHERE id=?", (i,))
-        DB.commit()
-        return x.rowcount > 0
-
-def kv_set(k, v):
-    with LK:
-        x = DB.cursor()
-        x.execute("INSERT OR REPLACE INTO kv VALUES(?,?)", (k, v))
-        DB.commit()
-
-def kv_get(k, d=None):
-    with LK:
-        x = DB.cursor()
-        x.execute("SELECT v FROM kv WHERE k=?", (k,))
-        r = x.fetchone()
-        return r[0] if r else d
-
-# ============================================================
-# JWT
-# ============================================================
-def jwt_p(tok):
+def log(*a):print(f"[{datetime.utcnow():%H:%M:%S}]",*a,flush=True)
+def jp(t):
     try:
-        s = tok.split(".")[1]
-        s += "=" * (-len(s) % 4)
+        s=t.split(".")[1];s+="="*(-len(s)%4)
         return json.loads(base64.urlsafe_b64decode(s))
-    except Exception as e:
-        return {"err": str(e)}
+    except:return{}
+def jid(t):return jp(t).get("userId")
+def jd(t):return(jp(t).get("exp",0)-time.time())/86400
+def dbadd(n,t,h):
+    with LK:
+        try:c=DB.execute("INSERT INTO accounts(name,token,uid,hx,at)VALUES(?,?,?,?,?)",(n,t,jid(t),h,datetime.utcnow().isoformat()));DB.commit();return c.lastrowid
+        except sqlite3.IntegrityError:return None
+def dbls():
+    with LK:return DB.execute("SELECT id,name,uid FROM accounts ORDER BY id").fetchall()
+def dbgt(i):
+    with LK:return DB.execute("SELECT id,name,token,uid,hx FROM accounts WHERE id=?",(i,)).fetchone()
+def dbdel(i):
+    with LK:c=DB.execute("DELETE FROM accounts WHERE id=?",(i,));DB.commit();return c.rowcount>0
+def kvs(k,v):
+    with LK:DB.execute("INSERT OR REPLACE INTO kv VALUES(?,?)",(k,v));DB.commit()
+def kvg(k,d=None):
+    with LK:r=DB.execute("SELECT v FROM kv WHERE k=?",(k,)).fetchone();return r[0] if r else d
+def mh():return secrets.token_hex(8)
+def clean(h):
+    if not h:return mh()
+    h=h.strip().lower()
+    if h.startswith("dev_"):h=h[4:]
+    if "|" in h:h=h.split("|",1)[0]
+    if len(h)!=16:return mh()
+    try:int(h,16)
+    except:return mh()
+    return h
+def ms():return int(time.time()*1000)
+def ims(s):
+    if not s:return None
+    try:return datetime.fromisoformat(s.replace("Z","+00:00")).timestamp()
+    except:return None
 
-def jwt_uid(tok):
-    return jwt_p(tok).get("userId")
+def UA():return f"Mozilla/5.0 (Linux; Android {AV}; {MD} Build/{BUILD}; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/152.0.7977.88 Mobile Safari/537.36"
+def HF(t,h):return{"accept":"application/json, text/plain, */*","authorization":f"Bearer {t}","x-platform":"android","x-app-version":"81229","x-is-rooted":"false","x-is-emulator":"false","x-device-fingerprint":f"dev_{h}|{BR}|{MD}|{AV}","x-device-ua":UA(),"accept-encoding":"gzip","user-agent":"okhttp/4.10.0","content-type":"application/json"}
+def HM(t,h):return{"authorization":f"Bearer {t}","x-device-fingerprint":f"dev_{h}|{BR}|{MD}|{AV}","accept-encoding":"gzip","user-agent":"okhttp/4.10.0","content-type":"application/json"}
+def GF(t,h,p):return requests.get(BASE+p,headers=HF(t,h),timeout=30).json()
+def PF(t,h,p,b):return requests.post(BASE+p,headers=HF(t,h),json=b,timeout=30).json()
+def PM(t,h,p,b):return requests.post(BASE+p,headers=HM(t,h),json=b,timeout=30).json()
 
-def jwt_days(tok):
-    return (jwt_p(tok).get("exp", 0) - time.time()) / 86400
+def TG_send(m,d):
+    try:requests.post(f"{TG}/{m}",data=d,timeout=15)
+    except:pass
+def tgs(c,t,kb=None):
+    d={"chat_id":c,"text":t,"parse_mode":"Markdown"}
+    if kb:d["reply_markup"]=json.dumps(kb)
+    TG_send("sendMessage",d)
+def tge(c,m,t,kb=None):
+    d={"chat_id":c,"message_id":m,"text":t,"parse_mode":"Markdown"}
+    if kb:d["reply_markup"]=json.dumps(kb)
+    TG_send("editMessageText",d)
+def tga(cb,t=None):
+    d={"callback_query_id":cb}
+    if t:d["text"]=t
+    TG_send("answerCallbackQuery",d)
 
-# ============================================================
-# TG
-# ============================================================
-def tg_send(cid, t, kb=None):
-    d = {"chat_id": cid, "text": t, "parse_mode": "Markdown"}
-    if kb: d["reply_markup"] = json.dumps(kb)
-    try: requests.post(f"{TG_API}/sendMessage", data=d, timeout=15)
-    except Exception as e: log("tg_send", e)
-
-def tg_edit(cid, mid, t, kb=None):
-    d = {"chat_id": cid, "message_id": mid,
-         "text": t, "parse_mode": "Markdown"}
-    if kb: d["reply_markup"] = json.dumps(kb)
-    try: requests.post(f"{TG_API}/editMessageText", data=d, timeout=15)
-    except Exception as e: log("tg_edit", e)
-
-def tg_ans(cbid, t=None):
-    d = {"callback_query_id": cbid}
-    if t: d["text"] = t
-    try: requests.post(f"{TG_API}/answerCallbackQuery",
-                       data=d, timeout=10)
-    except Exception: pass
-
-# ============================================================
-# OFFERPLAY API
-# ============================================================
-def hdr(tok):
-    return {
-        "accept": "application/json, text/plain, */*",
-        "authorization": f"Bearer {tok}",
-        "x-platform": "android",
-        "x-app-version": "81229",
-        "x-is-rooted": "false",
-        "x-is-emulator": "false",
-        "x-device-fingerprint":
-            "dev_248f03ee566cfa70|iQOO|I2301|15",
-        "x-device-ua": "Mozilla/5.0 (Linux; Android 15; " +
-            "I2301 Build/AP3A.240905.015.A2; wv) " +
-            "AppleWebKit/537.36 (KHTML, like Gecko) " +
-            "Version/4.0 Chrome/152.0.7977.88 Mobile Safari/537.36",
-        "content-type": "application/json",
-        "user-agent": "okhttp/4.10.0",
-        "accept-encoding": "gzip",
-    }
-
-def api_get(tok, p):
-    return requests.get(BASE + p, headers=hdr(tok), timeout=30).json()
-
-def api_post(tok, p, b=None):
-    return requests.post(BASE + p, headers=hdr(tok),
-                         json=b or {}, timeout=30).json()
-
-def gap(sec, label, N=None):
-    if N: N(f"⏳ {sec}s — {label}")
-    end = time.time() + sec
-    while time.time() < end:
-        time.sleep(min(5, max(.5, end - time.time())))
-    if N: N(f"✅ {label}")
-
-def status(tok):
-    j = api_get(tok, "/api/superoffers/status")
-    if not j.get("success"):
-        raise RuntimeError(f"status {j}")
-    return j["data"]
-
-def iso_ms(s):
-    if not s: return None
-    try:
-        return datetime.fromisoformat(
-            s.replace("Z", "+00:00")).timestamp()
-    except Exception:
-        return None
-
-# ============================================================
-# GEM FARM
-# ============================================================
-def farm_1(tok, N=None):
-    c = api_post(tok, "/api/ballmaxxing/gem-config", {})
-    c = c.get("data", {}) or {}
-    ms = c.get("milestones", [])
-    idx = c.get("ladderClaimedIdx", -1)
-    dt = c.get("dailyEarnedToday", 0)
-    dc = c.get("dailyCap", 60)
-    if dt >= dc:
-        if N: N("⚠️ daily cap")
-        return 0
-    ni = idx + 1
-    if ni >= len(ms):
-        if N: N("⚠️ all rungs claimed")
-        return 0
-    sec, gm = ms[ni]
-    w = sec + MARG
-    if N: N(f"🎯 rung #{ni}: {sec}s → +{gm}💎")
-    s = api_post(tok, "/api/ballmaxxing/start", {})
-    if not s.get("success"):
-        if N: N(f"❌ start {s}")
-        return 0
-    s = s["data"]
-    gap(w, "run", N)
-    r = api_post(tok, "/api/ballmaxxing/run", {
-        "sessionId": s["sessionId"], "token": s["token"],
-        "total": 3000, "surgeBonus": 0, "airBonus": 500,
-        "survivalMs": w * 1000, "saves": 25,
-        "revives": 0, "quit": False})
-    d = r.get("data", {})
-    aw = d.get("gemsAwarded", 0)
-    if N: N(f"💎 +{aw} {d.get('gemDailyTotal')}/{d.get('gemDailyCap')}")
-    return aw
-
-def farm_until(tok, tgt, N=None):
-    z = 0
-    while True:
-        st = status(tok)
-        bal = st["currentGemBalance"]
-        if bal >= tgt: return bal
-        if N: N(f"farming bal={bal} need={tgt}")
-        g = farm_1(tok, N)
-        if g == 0:
-            z += 1
-            if z >= 3: return bal
-            gap(5, "backoff", N)
-        else:
-            z = 0
-
-# ============================================================
-# STAGE
-# ============================================================
-def enter(tok, N=None):
-    r = api_post(tok, "/api/superoffers/enter", {})
-    if not r.get("success"):
-        if N: N(f"❌ enter {r}")
-        return None
-    d = r["data"]
-    if N: N(f"✅ #{d['attempt_id']} cost={d['gems_cost']}")
-    return d["attempt_id"]
-
-def do_game(tok, aid, N=None):
-    gap(G_SURV, "game", N)
-    api_post(tok, "/api/superoffers/game-complete", {
-        "attempt_id": aid, "source": "ballmaxxing",
-        "goals": 2500, "elapsed_sec": G_SURV})
-    gap(G_AFTER, "register", N)
-
-def do_ad(tok, aid, N=None):
-    gap(AD_W, "ad", N)
-    api_post(tok, "/api/superoffers/ad-complete",
-             {"attempt_id": aid})
-
-def do_inst(tok, aid, stg, N=None):
-    pkg, nm = INSTALL.get(stg,
-        (f"com.filler.app{stg}", f"App{stg}"))
-    gap(I_W, f"install {nm}", N)
-    api_post(tok, "/api/superoffers/install-detected", {
-        "attempt_id": aid, "app_package": pkg, "app_name": nm})
-    gap(U_W, "usage ≥120s", N)
-    api_post(tok, "/api/superoffers/verify-usage", {
-        "attempt_id": aid, "usage_minutes": 2})
-
-def do_claim(tok, aid, uid, N=None):
-    gap(C_GAP, "claim", N)
-    sid = f"SO_{aid}_{uid}_{int(time.time()*1000)}"
-    r = api_post(tok, "/api/superoffers/complete", {
-        "attempt_id": aid, "spend_id": sid})
-    d = r.get("data", {})
-    if N:
-        N(f"✅ coins={d.get('coins_awarded')} " +
-          f"bal={d.get('new_coin_balance')} " +
-          f"cd={d.get('cooldown_hours')}h")
-    return d
-
-def run_stage(acc, N=None):
-    _, name, tok, uid = acc
-    def NN(m):
-        if N: N(m)
-    st = status(tok)
-    ip = st.get("inProgressAttempt")
-    if ip is None:
-        if not st["canEnter"]:
-            cd = iso_ms(st.get("cooldownEndsAt"))
-            if cd and cd > time.time():
-                w = int(cd - time.time()) + 2
-                NN(f"🛏 cooldown {w}s")
-                time.sleep(w)
-            st = status(tok)
-            if not st["canEnter"]:
-                NN("❌ cannot enter")
-                return False
-        if st["currentGemBalance"] < st["gemsCost"]:
-            farm_until(tok, st["gemsCost"], NN)
-        a = enter(tok, NN)
-        if not a: return False
-        state = "pending"
-    else:
-        a = ip["id"]
-        state = ip.get("status", "pending")
-        NN(f"↩️ resume #{a} {state}")
-    if state == "pending":
-        do_game(tok, a, NN); state = "game_done"
-    if state in ("pending", "game_done"):
-        do_ad(tok, a, NN); state = "ad_watched"
-    stg = st["attemptNumber"]
-    inst = next((r["install"] for r in st["ladder"]
-                 if r["stage"] == stg), False)
-    if inst and state in ("pending", "game_done", "ad_watched"):
-        do_inst(tok, a, stg, NN)
-    do_claim(tok, a, uid, NN)
-    return True
-
-# ============================================================
-# JOBS
-# ============================================================
-JOBS = {}
-
-def running(i):
-    return JOBS.get(i, False)
-
-def spawn(i, fn, *a):
-    if running(i): return False
-    JOBS[i] = True
+class Stop(Exception):pass
+JOB,JLK={},threading.Lock()
+STP,SLK={},threading.Lock()
+def ev(i):
+    with SLK:
+        e=STP.get(i)
+        if e is None:e=threading.Event();STP[i]=e
+        return e
+def rst(i):ev(i).set()
+def clr(i):ev(i).clear()
+def ck(i):
+    if ev(i).is_set():raise Stop(f"#{i}")
+def run(i):
+    with JLK:return JOB.get(i,False)
+def sp(i,fn,*a):
+    with JLK:
+        if JOB.get(i,False):return False
+        JOB[i]=True
+    clr(i)
     def w():
-        try: fn(*a)
-        except Exception as e:
-            log("job", e, traceback.format_exc())
-        finally: JOBS[i] = False
-    threading.Thread(target=w, daemon=True).start()
+        try:fn(*a)
+        except Stop:pass
+        except Exception as e:log("job",e,traceback.format_exc())
+        finally:
+            with JLK:JOB[i]=False
+            clr(i)
+    threading.Thread(target=w,daemon=True).start();return True
+def gap(s,l,N=None,i=None):
+    if N:N(f"⏳ {s}s — {l}")
+    e=time.time()+s
+    while time.time()<e:
+        if i is not None:ck(i)
+        time.sleep(min(.5,max(.05,e-time.time())))
+    if i is not None:ck(i)
+    if N:N(f"✅ {l}")
+
+def st(t,h):
+    j=GF(t,h,"/api/superoffers/status")
+    if not j.get("success"):raise RuntimeError(f"status {j}")
+    return j["data"]
+def events(t,h,e):return PF(t,h,"/api/superoffers/events",{"events":e})
+def enter(t,h):
+    j=PM(t,h,"/api/superoffers/enter",{})
+    return j.get("data") if j.get("success") else None
+def game(t,h,a,go,s):return PF(t,h,"/api/superoffers/game-complete",{"attempt_id":a,"source":"ballmaxxing","goals":go,"elapsed_sec":s})
+def adc(t,h,a):return PF(t,h,"/api/superoffers/ad-complete",{"attempt_id":a})
+def ins(t,h,a,p,n):return PF(t,h,"/api/superoffers/install-detected",{"attempt_id":a,"app_package":p,"app_name":n})
+def usg(t,h,a):return PF(t,h,"/api/superoffers/verify-usage",{"attempt_id":a,"usage_minutes":2})
+def claim(t,h,a,u):return PM(t,h,"/api/superoffers/complete",{"attempt_id":a,"spend_id":f"SO_{a}_{u}_{ms()}"})
+def bst(t,h):
+    j=PM(t,h,"/api/ballmaxxing/start",{})
+    return j.get("data") if j.get("success") else None
+def brun(t,h,s,tk,to,sm):
+    return PM(t,h,"/api/ballmaxxing/run",{"sessionId":s,"token":tk,"total":to,"surgeBonus":random.randint(0,200),"airBonus":random.randint(200,800),"survivalMs":sm,"saves":random.randint(10,30),"revives":0,"quit":False})
+def gcf(t,h):return PF(t,h,"/api/ballmaxxing/gem-config",{}).get("data") or {}
+
+def f1(t,h,i,N=None):
+    ck(i);c=gcf(t,h);m=c.get("milestones",[]);x=c.get("ladderClaimedIdx",-1)
+    if c.get("dailyEarnedToday",0)>=c.get("dailyCap",60):
+        if N:N("⚠️ cap")
+        return 0
+    ni=x+1
+    if ni>=len(m):
+        if N:N("⚠️ done")
+        return 0
+    s,g=m[ni];w=s+5
+    if N:N(f"🎯 rung {ni}: {s}s +{g}💎")
+    ss=bst(t,h)
+    if not ss:return 0
+    gap(w,"run",N,i)
+    r=brun(t,h,ss["sessionId"],ss["token"],random.randint(2000,4000),w*1000)
+    return (r.get("data") or {}).get("gemsAwarded",0)
+def fu(t,h,tt,i,N=None):
+    z=0
+    while True:
+        ck(i);b=st(t,h)["currentGemBalance"]
+        if b>=tt:return b
+        if N:N(f"farm {b}/{tt}")
+        if f1(t,h,i,N)==0:
+            z+=1
+            if z>=3:return b
+            gap(5,"backoff",N,i)
+        else:z=0
+
+def attempt(acc,i,N=None):
+    _,n,t,u,h=acc;ck(i)
+    s=st(t,h);ip=s.get("inProgressAttempt");an=s["attemptNumber"]
+    def ins_for(k):
+        for r in s.get("ladder",[]):
+            if r["stage"]==k:return bool(r["install"])
+        return False
+    fl=ins_for(an);ses=f"so_{secrets.token_hex(4)}_{secrets.token_hex(4)}"
+    ns=None
+    if ip is None:
+        if not s["canEnter"]:
+            cd=ims(s.get("cooldownEndsAt"))
+            if cd and cd>time.time():
+                w=int(cd-time.time())+2
+                if N:N(f"🛏 {w}s")
+                e=time.time()+w
+                while time.time()<e:ck(i);time.sleep(min(1,max(.1,e-time.time())))
+            s=st(t,h)
+            if not s["canEnter"]:
+                if N:N("❌ no enter")
+                return False
+        if s["currentGemBalance"]<s["gemsCost"]:fu(t,h,s["gemsCost"],i,N)
+        events(t,h,[{"eventType":"cta_click","screen":"landing","target":"start","attemptNumber":an,"sessionId":ses,"occurredAt":ms()}])
+        e=enter(t,h)
+        if not e:
+            if N:N("❌ enter fail")
+            return False
+        a=e["attempt_id"];an=e.get("attempt_number",an);fl=ins_for(an)
+        if N:N(f"✅ #{a} cost={e.get('gems_cost')}")
+        events(t,h,[{"eventType":"enter","screen":"landing","attemptId":a,"sessionId":ses,"occurredAt":ms()},
+                    {"eventType":"screen_view","screen":"detail","attemptId":a,"sessionId":ses,"occurredAt":ms()},
+                    {"eventType":"path_choice","screen":"detail","target":"ballmaxxing","attemptId":a,"sessionId":ses,"occurredAt":ms()}])
+        state="pending"
+    else:
+        a=ip["id"];state=ip.get("status","pending")
+        if N:N(f"↩️ resume #{a} {state}")
+        events(t,h,[{"eventType":"cta_click","screen":"landing","target":"resume","attemptNumber":an,"sessionId":ses,"occurredAt":ms()},
+                    {"eventType":"screen_view","screen":"detail","attemptId":a,"sessionId":ses,"occurredAt":ms()}])
+        if state=="pending":
+            events(t,h,[{"eventType":"path_choice","screen":"detail","target":"ballmaxxing","attemptId":a,"sessionId":ses,"occurredAt":ms()}])
+    if state=="pending":
+        ss=bst(t,h)
+        if not ss:
+            if N:N("❌ ball fail")
+            return False
+        gap(GS,"game",N,i)
+        to=random.randint(2000,4000)
+        brun(t,h,ss["sessionId"],ss["token"],to,GS*1000)
+        game(t,h,a,to,GS)
+        gap(GA,"register",N,i)
+        state="game_done"
+    if state in("pending","game_done"):
+        events(t,h,[{"eventType":"ad_open","screen":"detail","target":"superOffer","attemptId":a,"sessionId":ses,"occurredAt":ms()}])
+        gap(AW,"ad",N,i)
+        r=adc(t,h,a);ns=(r.get("data") or {}).get("next_step")
+        events(t,h,[{"eventType":"ad_earned","screen":"detail","target":"superOffer","attemptId":a,"sessionId":ses,"occurredAt":ms()}])
+        state="ad_watched"
+    ni=fl and (ns=="install_app" or ns is None)
+    if state=="ad_watched" and ni:
+        p,nm=INST.get(an,(f"com.filler.app{an}",f"App{an}"))
+        gap(IW,f"install {nm}",N,i)
+        ins(t,h,a,p,nm)
+        gap(UW,"usage",N,i)
+        usg(t,h,a)
+        state="used"
+    elif state=="installed":
+        gap(UW,"usage",N,i)
+        usg(t,h,a)
+        state="used"
+    gap(CG,"claim",N,i)
+    r=claim(t,h,a,u);d=r.get("data") or {}
+    if N:N(f"✅ coins={d.get('coins_awarded')} bal={d.get('new_coin_balance')}")
+    events(t,h,[{"eventType":"complete","screen":"detail","attemptId":a,"value":d.get("coins_awarded",0),"sessionId":ses,"occurredAt":ms()}])
     return True
 
-# ============================================================
-# KEYBOARDS
-# ============================================================
-def kb_main():
-    rows = []
-    for i, n, u in db_list():
-        pre = "🟢 " if running(i) else ""
-        rows.append([{"text": f"{pre}{n}",
-                      "callback_data": f"a:{i}"}])
-    rows.append([{"text": "➕ Add Token", "callback_data": "add"}])
-    rows.append([{"text": "🔄 Refresh", "callback_data": "home"}])
-    return {"inline_keyboard": rows}
-
-def kb_acc(i):
-    return {"inline_keyboard": [
-        [{"text": "📊 Status", "callback_data": f"s:{i}"}],
-        [{"text": "▶️ Run Next Stage", "callback_data": f"n:{i}"}],
-        [{"text": "🏁 Run All Stages", "callback_data": f"r:{i}"}],
-        [{"text": "💰 Farm Gems", "callback_data": f"f:{i}"}],
-        [{"text": "🗑 Remove", "callback_data": f"x:{i}"}],
-        [{"text": "◀️ Back", "callback_data": "home"}],
-    ]}
-
-def kb_rm(i):
-    return {"inline_keyboard": [
-        [{"text": "✅ Yes, remove", "callback_data": f"y:{i}"}],
-        [{"text": "❌ Cancel", "callback_data": f"a:{i}"}],
-    ]}
-
-# ============================================================
-# TEXTS
-# ============================================================
-def menu_text():
-    accs = db_list()
-    L = [f"*OfferPlay Bot v{VERSION}*",
-         f"Accounts: *{len(accs)}*", ""]
-    if not accs:
-        L.append("_No accounts. Tap ➕ Add Token._")
-    else:
-        for i, n, u in accs:
-            r = " 🟢" if running(i) else ""
-            L.append(f"• *#{i}* `{u[:12]}…`{r}")
-    L.append("")
-    L.append("_Tap an account below_")
-    return "\n".join(L)
-
-def acc_text(i):
-    acc = db_get(i)
-    if not acc: return "_not found_"
-    _, n, tok, uid = acc
-    d = jwt_days(tok)
-    try:
-        st = status(tok)
-        s = st["attemptNumber"]; g = st["currentGemBalance"]
-        ce = st["canEnter"]; cd = st.get("cooldownEndsAt") or "—"
-        ip = st.get("inProgressAttempt")
-        ipt = f"`{ip['status']}` id={ip['id']}" if ip else "—"
-    except Exception as e:
-        s = g = "?"; ce = False; cd = "err"; ipt = "—"
-    r = "🟢 RUNNING" if running(i) else "⚪ idle"
-    return (f"*#{i} — {n}*\n"
-            f"uid: `{uid}`\n"
-            f"token: {d:.1f}d left\n"
-            f"status: {r}\n\n"
-            f"stage: {s}/20\n"
-            f"gems: {g}\n"
-            f"canEnter: {ce}\n"
-            f"cooldown: {cd}\n"
-            f"inProgress: {ipt}")
-
-# ============================================================
-# CALLBACKS
-# ============================================================
-def cb(c):
-    cid = c["id"]
-    chat = c["message"]["chat"]["id"]
-    mid = c["message"]["message_id"]
-    d = c.get("data", "")
-    if d == "home":
-        tg_ans(cid)
-        tg_edit(chat, mid, menu_text(), kb_main())
-    elif d == "add":
-        tg_ans(cid)
-        kv_set(f"aw:{chat}", "add")
-        tg_edit(chat, mid,
-            "Paste your *bearer token* (`eyJ...`).\n\n/cancel to abort.",
-            {"inline_keyboard":
-                [[{"text": "❌ Cancel", "callback_data": "home"}]]})
-    elif d.startswith("a:"):
-        i = int(d.split(":")[1]); tg_ans(cid)
-        tg_edit(chat, mid, acc_text(i), kb_acc(i))
-    elif d.startswith("s:"):
-        i = int(d.split(":")[1]); tg_ans(cid, "…")
-        tg_edit(chat, mid, acc_text(i), kb_acc(i))
-    elif d.startswith("x:"):
-        i = int(d.split(":")[1]); tg_ans(cid)
-        tg_edit(chat, mid, f"Remove *#{i}*?", kb_rm(i))
-    elif d.startswith("y:"):
-        i = int(d.split(":")[1])
-        ok = db_del(i)
-        tg_ans(cid, "removed" if ok else "nope")
-        tg_edit(chat, mid, menu_text(), kb_main())
-    elif d.startswith("n:"):
-        i = int(d.split(":")[1]); tg_ans(cid, "starting…")
-        go_next(chat, i)
-    elif d.startswith("r:"):
-        i = int(d.split(":")[1]); tg_ans(cid, "starting…")
-        go_all(chat, i)
-    elif d.startswith("f:"):
-        i = int(d.split(":")[1]); tg_ans(cid, "starting…")
-        go_farm(chat, i)
-    else:
-        tg_ans(cid)
-
-def go_next(chat, i):
-    a = db_get(i)
-    if not a:
-        tg_send(chat, "not found"); return
-    def N(m): tg_send(chat, f"*#{i}* {m}")
+def gnext(ch,i):
+    a=dbgt(i)
+    if not a:return tgs(ch,"not found")
+    def N(m):tgs(ch,f"*#{i}* {m}")
     def j():
-        tg_send(chat, f"*#{i}* ▶️ next…")
-        try:
-            ok = run_stage(a, N)
-            tg_send(chat, f"*#{i}* {'✅ done' if ok else '❌ failed'}",
-                    kb_acc(i))
-        except Exception as e:
-            tg_send(chat, f"*#{i}* 💥 {e}")
-    if not spawn(i, j):
-        tg_send(chat, f"*#{i}* busy")
-
-def go_all(chat, i):
-    a = db_get(i)
-    if not a:
-        tg_send(chat, "not found"); return
-    def N(m): tg_send(chat, f"*#{i}* {m}")
+        tgs(ch,f"*#{i}* ▶️")
+        try:ok=attempt(a,i,N);tgs(ch,f"*#{i}* {'✅' if ok else '❌'}",kac(i))
+        except Stop:tgs(ch,f"*#{i}* 🛑",kac(i))
+        except Exception as e:tgs(ch,f"*#{i}* 💥 {e}")
+    if not sp(i,j):tgs(ch,f"*#{i}* busy")
+def gall(ch,i):
+    a=dbgt(i)
+    if not a:return tgs(ch,"not found")
+    def N(m):tgs(ch,f"*#{i}* {m}")
     def j():
-        tg_send(chat, f"*#{i}* 🏁 running all…")
+        tgs(ch,f"*#{i}* 🏁")
         while True:
-            try:
-                st = status(a[2])
-                if st["attemptNumber"] > 20 or st.get("weekComplete"):
-                    tg_send(chat, f"*#{i}* 🎉 week complete"); return
-                ok = run_stage(a, N)
-                if not ok:
-                    tg_send(chat, f"*#{i}* ❌ stopping"); return
-                st = status(a[2])
-                cd = iso_ms(st.get("cooldownEndsAt"))
-                if cd and cd > time.time():
-                    w = int(cd - time.time()) + 2
-                    N(f"🛏 {w}s")
-                    time.sleep(w)
-            except Exception as e:
-                tg_send(chat, f"*#{i}* 💥 {e}"); return
-    if not spawn(i, j):
-        tg_send(chat, f"*#{i}* busy")
-
-def go_farm(chat, i):
-    a = db_get(i)
-    if not a:
-        tg_send(chat, "not found"); return
-    def N(m): tg_send(chat, f"*#{i}* {m}")
+            ck(i);s=st(a[2],a[4])
+            if s.get("weekComplete") or s["attemptNumber"]>20:tgs(ch,f"*#{i}* 🎉");return
+            if not attempt(a,i,N):tgs(ch,f"*#{i}* ❌");return
+            gap(2,"next",None,i)
+    if not sp(i,j):tgs(ch,f"*#{i}* busy")
+def gfarm(ch,i):
+    a=dbgt(i)
+    if not a:return tgs(ch,"not found")
+    def N(m):tgs(ch,f"*#{i}* {m}")
     def j():
-        tg_send(chat, f"*#{i}* 💰 farming…")
-        try:
-            b = farm_until(a[2], 999, N)
-            tg_send(chat, f"*#{i}* bal={b}", kb_acc(i))
-        except Exception as e:
-            tg_send(chat, f"*#{i}* 💥 {e}")
-    if not spawn(i, j):
-        tg_send(chat, f"*#{i}* busy")
+        tgs(ch,f"*#{i}* 💰")
+        try:b=fu(a[2],a[4],999,i,N);tgs(ch,f"*#{i}* bal={b}",kac(i))
+        except Stop:tgs(ch,f"*#{i}* 🛑",kac(i))
+        except Exception as e:tgs(ch,f"*#{i}* 💥 {e}")
+    if not sp(i,j):tgs(ch,f"*#{i}* busy")
 
-# ============================================================
-# MESSAGES
-# ============================================================
+def km():
+    r=[[{"text":("🟢 " if run(i) else "")+n,"callback_data":f"a:{i}"}] for i,n,u in dbls()]
+    r+=[[{"text":"➕ Add","callback_data":"add"}],[{"text":"🔄","callback_data":"home"}]]
+    return{"inline_keyboard":r}
+def kac(i):
+    r=[]
+    if run(i):r.append([{"text":"🛑 STOP","callback_data":f"st:{i}"}])
+    r+=[[{"text":"📊","callback_data":f"s:{i}"}],[{"text":"▶️ Next","callback_data":f"n:{i}"}],[{"text":"🏁 All","callback_data":f"r:{i}"}],[{"text":"💰 Farm","callback_data":f"f:{i}"}],[{"text":"🗑","callback_data":f"x:{i}"}],[{"text":"◀️","callback_data":"home"}]]
+    return{"inline_keyboard":r}
+def krm(i):return{"inline_keyboard":[[{"text":"✅","callback_data":f"y:{i}"}],[{"text":"❌","callback_data":f"a:{i}"}]]}
+def mt():
+    a=dbls();L=[f"*OP v{V}*",f"*{len(a)}*",""]
+    if not a:L.append("_none_")
+    else:
+        for i,n,u in a:L.append(f"*#{i}* `{(u or '')[:12]}…`{' 🟢' if run(i) else ''}")
+    return"\n".join(L)
+def atx(i):
+    a=dbgt(i)
+    if not a:return"_nf_"
+    _,n,t,u,h=a;d=jd(t)
+    try:
+        s=st(t,h);sg=s["attemptNumber"];g=s["currentGemBalance"];ce=s["canEnter"];cd=s.get("cooldownEndsAt") or "—";ip=s.get("inProgressAttempt")
+        ipt=f"`{ip['status']}` id={ip['id']}" if ip else "—"
+    except:sg=g="?";ce=False;cd="err";ipt="—"
+    return(f"*#{i} {n}*\nuid:`{u}`\nfp:`dev_{h}|{BR}|{MD}|{AV}`\ntok:{d:.1f}d\nst:{'🟢' if run(i) else '⚪'}\nstage:{sg}/20\ngems:{g}\nenter:{ce}\ncd:{cd}\nip:{ipt}")
+
+def cb(c):
+    ci=c["id"];ch=c["message"]["chat"]["id"];mi=c["message"]["message_id"];d=c.get("data","")
+    if d=="home":tga(ci);tge(ch,mi,mt(),km())
+    elif d=="add":tga(ci);kvs(f"aw:{ch}","add");tge(ch,mi,"Paste bearer (`eyJ...`).\n/cancel",{"inline_keyboard":[[{"text":"❌","callback_data":"home"}]]})
+    elif d.startswith("a:"):i=int(d[2:]);tga(ci);tge(ch,mi,atx(i),kac(i))
+    elif d.startswith("s:"):i=int(d[2:]);tga(ci,"…");tge(ch,mi,atx(i),kac(i))
+    elif d.startswith("st:"):
+        i=int(d[3:])
+        if run(i):rst(i);tga(ci,"🛑")
+        else:tga(ci,"no")
+        time.sleep(.4);tge(ch,mi,atx(i),kac(i))
+    elif d.startswith("x:"):i=int(d[2:]);tga(ci);tge(ch,mi,f"Remove #{i}?",krm(i))
+    elif d.startswith("y:"):
+        i=int(d[2:])
+        if run(i):rst(i)
+        tga(ci,"rm" if dbdel(i) else "no");tge(ch,mi,mt(),km())
+    elif d.startswith("n:"):i=int(d[2:]);tga(ci,"…");gnext(ch,i)
+    elif d.startswith("r:"):i=int(d[2:]);tga(ci,"…");gall(ch,i)
+    elif d.startswith("f:"):i=int(d[2:]);tga(ci,"…");gfarm(ch,i)
+    else:tga(ci)
+
 def msg(m):
-    chat = m["chat"]["id"]
-    t = (m.get("text") or "").strip()
-    if t == "/cancel":
-        kv_set(f"aw:{chat}", "")
-        tg_send(chat, "Cancelled", kb_main()); return
-    if kv_get(f"aw:{chat}") == "add":
-        tok = t
-        if not tok.startswith("eyJ"):
-            tg_send(chat, "❌ Not a JWT.\nStarts with `eyJ...`\n\n"
-                "Send or /cancel."); return
-        uid = jwt_uid(tok)
-        if not uid:
-            tg_send(chat, "❌ Invalid token."); return
-        n = len(db_list()) + 1
-        name = f"Account {n}"
-        new = db_add(name, tok)
-        kv_set(f"aw:{chat}", "")
-        if new is None:
-            tg_send(chat, "❌ Token already added.", kb_main())
-        else:
-            tg_send(chat,
-                f"✅ *{name}* added\nuid: `{uid}`",
-                kb_main())
-        return
-    if t.startswith("/start") or t.startswith("/accounts"):
-        tg_send(chat, menu_text(), kb_main()); return
-    if t.startswith("/add"):
-        kv_set(f"aw:{chat}", "add")
-        tg_send(chat,
-            "Paste your *bearer token* (`eyJ...`).\n\n/cancel to abort.",
-            {"inline_keyboard":
-                [[{"text": "❌ Cancel", "callback_data": "home"}]]})
-        return
-    tg_send(chat, "Use /start", kb_main())
+    ch=m["chat"]["id"];t=(m.get("text") or "").strip()
+    if t=="/cancel":kvs(f"aw:{ch}","");return tgs(ch,"Cancel",km())
+    if t.startswith("/stop"):
+        p=t.split()
+        if len(p)==2 and p[1].isdigit():
+            i=int(p[1])
+            if run(i):rst(i);return tgs(ch,f"🛑 #{i}",kac(i))
+            return tgs(ch,f"#{i} idle")
+        nn=0
+        for i,_,_ in dbls():
+            if run(i):rst(i);nn+=1
+        return tgs(ch,f"🛑 {nn}",km())
+    if kvg(f"aw:{ch}")=="add":
+        if not t.startswith("eyJ"):return tgs(ch,"❌ not JWT")
+        u=jid(t)
+        if not u:return tgs(ch,"❌ bad")
+        h=mh();nm=f"Account {len(dbls())+1}";new=dbadd(nm,t,h);kvs(f"aw:{ch}","")
+        if new is None:return tgs(ch,"❌ dup",km())
+        return tgs(ch,f"✅ {nm}\nuid:`{u}`\nfp:`dev_{h}|{BR}|{MD}|{AV}`",km())
+    if t.startswith("/start") or t.startswith("/accounts"):return tgs(ch,mt(),km())
+    if t.startswith("/add"):kvs(f"aw:{ch}","add");return tgs(ch,"Paste bearer (`eyJ...`).\n/cancel",{"inline_keyboard":[[{"text":"❌","callback_data":"home"}]]})
+    tgs(ch,"/start",km())
 
-# ============================================================
-# POLL LOOP — retries forever
-# ============================================================
 def poll():
-    off = 0
-    log("poll thread started")
+    o=0;log("poll")
     while True:
         try:
-            r = requests.get(f"{TG_API}/getUpdates",
-                params={"offset": off, "timeout": 25,
-                    "allowed_updates":
-                        json.dumps(["message","callback_query"])},
-                timeout=35)
-            d = r.json()
-            if not d.get("ok"):
-                log("bad", d); time.sleep(3); continue
-            for u in d.get("result", []):
-                off = u["update_id"] + 1
+            d=requests.get(f"{TG}/getUpdates",params={"offset":o,"timeout":25,"allowed_updates":json.dumps(["message","callback_query"])},timeout=35).json()
+            if not d.get("ok"):log("bad",d);time.sleep(3);continue
+            for u in d.get("result",[]):
+                o=u["update_id"]+1
                 try:
-                    if "callback_query" in u:
-                        cb(u["callback_query"])
-                    elif "message" in u:
-                        msg(u["message"])
-                except Exception as e:
-                    log("upd", e, traceback.format_exc())
-        except requests.exceptions.ReadTimeout:
-            continue
-        except Exception as e:
-            log("poll err", e); time.sleep(3)
+                    if "callback_query" in u:cb(u["callback_query"])
+                    elif "message" in u:msg(u["message"])
+                except Exception as e:log("u",e)
+        except requests.exceptions.ReadTimeout:continue
+        except Exception as e:log("p",e);time.sleep(3)
 
-def tg_boot():
-    """Keeps retrying forever if poll ever crashes."""
+def boot():
     while True:
         try:
-            if CHAT_ID:
-                tg_send(CHAT_ID, f"🚀 OfferPlay Bot v{VERSION} online")
+            if CHAT:tgs(CHAT,f"🚀 OP v{V}")
             poll()
-        except Exception as e:
-            log("tg_boot crashed, retry in 10s:", e)
-            time.sleep(10)
+        except Exception as e:log("boot",e);time.sleep(10)
 
-# ============================================================
-# FLASK — main thread, keeps Render URL alive
-# ============================================================
-app = Flask(__name__)
+def seed():
+    a=0
+    for r in ACC:
+        t=r[0].strip();h=r[1] if len(r)>1 else "";n=r[2] if len(r)>2 and r[2] else f"Account {len(dbls())+1}"
+        if not t.startswith("eyJ"):continue
+        if not jid(t):continue
+        if dbadd(n,t,clean(h)) is not None:a+=1
+    log(f"seed {a}")
 
+app=Flask(__name__)
 @app.route("/")
-def index():
-    return "Active", 200
-
+def idx():return"Active",200
 @app.route("/health")
-def health():
-    return "Active", 200
-
+def hlth():return"Active",200
 @app.route("/status")
-def status_page():
-    return jsonify({
-        "ok": True,
-        "version": VERSION,
-        "accounts": len(db_list()),
-        "uptime_sec": int(time.time() - START_TIME),
-        "time": datetime.utcnow().isoformat() + "Z"
-    })
-
+def statpage():return jsonify({"ok":True,"v":V,"n":len(dbls()),"run":[i for i,_,_ in dbls() if run(i)]})
 @app.route("/stop")
-def stop():
-    os._exit(1)
+def stp():os._exit(1)
 
-# ============================================================
-# ENTRY
-# ============================================================
-if __name__ == "__main__":
-    threading.Thread(target=tg_boot, daemon=True).start()
-    app.run(host="0.0.0.0", port=PORT, threaded=True)
+if __name__=="__main__":
+    seed()
+    threading.Thread(target=boot,daemon=True).start()
+    app.run(host="0.0.0.0",port=PORT,threaded=True)

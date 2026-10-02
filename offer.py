@@ -1,4 +1,4 @@
-import os,json,time,base64,sqlite3,threading,secrets,random,traceback
+import os,json,time,base64,sqlite3,threading,secrets,random,traceback,uuid
 import requests
 from datetime import datetime
 from flask import Flask,jsonify
@@ -17,24 +17,18 @@ DBP=os.environ.get("DB_PATH","/data/accounts.db")
 if not os.path.isdir(os.path.dirname(DBP)):DBP="accounts.db"
 BASE="https://api.offerplay.in"
 TG=f"https://api.telegram.org/bot{BOT}"
-V="2.3.0"
-BR,MD,AV,BUILD="iQOO","I2301","15","AP3A.240905.015.A2"
+V="2.4.0"
+BR,MD,AV,BU="iQOO","I2301","15","AP3A.240905.015.A2"
 GS,GA,AW,IW,UW,CG=35,5,20,35,130,3
-INST={2:("com.vedantu.app","Vedantu"),5:("com.phonepe.app","PhonePe"),
-      8:("in.swiggy.android","Swiggy"),12:("com.flipkart.android","Flipkart"),
-      15:("com.myntra.android","Myntra"),18:("net.one97.paytm","Paytm")}
+INST={2:("com.vedantu.app","Vedantu"),5:("com.phonepe.app","PhonePe"),8:("in.swiggy.android","Swiggy"),12:("com.flipkart.android","Flipkart"),15:("com.myntra.android","Myntra"),18:("net.one97.paytm","Paytm")}
 
-DB=sqlite3.connect(DBP,check_same_thread=False)
-LK=threading.Lock()
+DB=sqlite3.connect(DBP,check_same_thread=False);LK=threading.Lock()
 DB.execute("CREATE TABLE IF NOT EXISTS accounts(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT,token TEXT UNIQUE,uid TEXT,hx TEXT,at TEXT)")
-DB.execute("CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY,v TEXT)")
-DB.commit()
-
+DB.execute("CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY,v TEXT)");DB.commit()
 def log(*a):print(f"[{datetime.utcnow():%H:%M:%S}]",*a,flush=True)
 def jp(t):
     try:
-        s=t.split(".")[1];s+="="*(-len(s)%4)
-        return json.loads(base64.urlsafe_b64decode(s))
+        s=t.split(".")[1];s+="="*(-len(s)%4);return json.loads(base64.urlsafe_b64decode(s))
     except:return{}
 def jid(t):return jp(t).get("userId")
 def jd(t):return(jp(t).get("exp",0)-time.time())/86400
@@ -67,8 +61,7 @@ def ims(s):
     if not s:return None
     try:return datetime.fromisoformat(s.replace("Z","+00:00")).timestamp()
     except:return None
-
-def UA():return f"Mozilla/5.0 (Linux; Android {AV}; {MD} Build/{BUILD}; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/152.0.7977.88 Mobile Safari/537.36"
+def UA():return f"Mozilla/5.0 (Linux; Android {AV}; {MD} Build/{BU}; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/152.0.7977.88 Mobile Safari/537.36"
 def HF(t,h):return{"accept":"application/json, text/plain, */*","authorization":f"Bearer {t}","x-platform":"android","x-app-version":"81229","x-is-rooted":"false","x-is-emulator":"false","x-device-fingerprint":f"dev_{h}|{BR}|{MD}|{AV}","x-device-ua":UA(),"accept-encoding":"gzip","user-agent":"okhttp/4.10.0","content-type":"application/json"}
 def HM(t,h):return{"authorization":f"Bearer {t}","x-device-fingerprint":f"dev_{h}|{BR}|{MD}|{AV}","accept-encoding":"gzip","user-agent":"okhttp/4.10.0","content-type":"application/json"}
 def GF(t,h,p):return requests.get(BASE+p,headers=HF(t,h),timeout=30).json()
@@ -79,11 +72,11 @@ def TGs(m,d):
     try:requests.post(f"{TG}/{m}",data=d,timeout=15)
     except:pass
 def tgs(c,t,kb=None):
-    d={"chat_id":c,"text":t,"parse_mode":"Markdown"}
+    d={"chat_id":c,"text":t,"parse_mode":"Markdown","disable_web_page_preview":True}
     if kb:d["reply_markup"]=json.dumps(kb)
     TGs("sendMessage",d)
 def tge(c,m,t,kb=None):
-    d={"chat_id":c,"message_id":m,"text":t,"parse_mode":"Markdown"}
+    d={"chat_id":c,"message_id":m,"text":t,"parse_mode":"Markdown","disable_web_page_preview":True}
     if kb:d["reply_markup"]=json.dumps(kb)
     TGs("editMessageText",d)
 def tga(cb,t=None):
@@ -92,8 +85,7 @@ def tga(cb,t=None):
     TGs("answerCallbackQuery",d)
 
 class Stop(Exception):pass
-JOB,JLK={},threading.Lock()
-STP,SLK={},threading.Lock()
+JOB,JLK={},threading.Lock();STP,SLK={},threading.Lock()
 def ev(i):
     with SLK:
         e=STP.get(i)
@@ -143,9 +135,12 @@ def claim(t,h,a,u):return PM(t,h,"/api/superoffers/complete",{"attempt_id":a,"sp
 def bst(t,h):
     j=PM(t,h,"/api/ballmaxxing/start",{})
     return j.get("data") if j.get("success") else None
-def brun(t,h,s,tk,to,sm):
-    return PM(t,h,"/api/ballmaxxing/run",{"sessionId":s,"token":tk,"total":to,"surgeBonus":random.randint(0,200),"airBonus":random.randint(200,800),"survivalMs":sm,"saves":random.randint(10,30),"revives":0,"quit":False})
+def brun(t,h,s,tk,to,sm):return PM(t,h,"/api/ballmaxxing/run",{"sessionId":s,"token":tk,"total":to,"surgeBonus":random.randint(0,200),"airBonus":random.randint(200,800),"survivalMs":sm,"saves":random.randint(10,30),"revives":0,"quit":False})
 def gcf(t,h):return PF(t,h,"/api/ballmaxxing/gem-config",{}).get("data") or {}
+def me(t,h):return GF(t,h,"/api/users/me")
+def pkg(t,h):return GF(t,h,"/api/redeem/packages")
+def hist(t,h,pg=1,lm=10):return GF(t,h,f"/api/earn/redeem/history?page={pg}&limit={lm}")
+def rdm(t,h,pid,co,fl,rk,ik):return PF(t,h,"/api/redeem/request",{"type":rk,"coinsToRedeem":co,"packageId":pid,"customFieldValues":fl,"idempotencyKey":ik})
 
 def f1(t,h,i,N=None):
     ck(i);c=gcf(t,h);m=c.get("milestones",[]);x=c.get("ladderClaimedIdx",-1)
@@ -178,25 +173,19 @@ def fu(t,h,tt,i,N=None):
 def attempt(acc,i,N=None,target=None):
     _,n,t,u,h=acc;ck(i)
     s=st(t,h);ip=s.get("inProgressAttempt");an=s["attemptNumber"]
-    if target is not None:
-        if ip is None and an!=target:
-            if N:N(f"❌ server at stage {an}, you asked stage {target}")
-            return False
-        if ip is not None and an!=target:
-            if N:N(f"⚠️ resuming stage {an} (server), ignoring #{target}")
-        if N:N(f"🎯 target stage {target}")
+    if target is not None and ip is None and an!=target:
+        if N:N(f"❌ server at stage {an}, you asked {target}")
+        return False
     def ins_for(k):
         for r in s.get("ladder",[]):
             if r["stage"]==k:return bool(r["install"])
         return False
-    fl=ins_for(an);ses=f"so_{secrets.token_hex(4)}_{secrets.token_hex(4)}"
-    ns=None
+    fl=ins_for(an);ses=f"so_{secrets.token_hex(4)}_{secrets.token_hex(4)}";ns=None
     if ip is None:
         if not s["canEnter"]:
             cd=ims(s.get("cooldownEndsAt"))
             if cd and cd>time.time():
-                w=int(cd-time.time())+2
-                if N:N(f"🛏 cooldown {w}s — try later")
+                if N:N(f"🛏 cooldown {int(cd-time.time())+2}s — try later")
                 return False
             s=st(t,h)
             if not s["canEnter"]:
@@ -210,15 +199,12 @@ def attempt(acc,i,N=None,target=None):
             return False
         a=e["attempt_id"];an=e.get("attempt_number",an);fl=ins_for(an)
         if N:N(f"✅ #{a} cost={e.get('gems_cost')}")
-        events(t,h,[{"eventType":"enter","screen":"landing","attemptId":a,"sessionId":ses,"occurredAt":ms()},
-                    {"eventType":"screen_view","screen":"detail","attemptId":a,"sessionId":ses,"occurredAt":ms()},
-                    {"eventType":"path_choice","screen":"detail","target":"ballmaxxing","attemptId":a,"sessionId":ses,"occurredAt":ms()}])
+        events(t,h,[{"eventType":"enter","screen":"landing","attemptId":a,"sessionId":ses,"occurredAt":ms()},{"eventType":"screen_view","screen":"detail","attemptId":a,"sessionId":ses,"occurredAt":ms()},{"eventType":"path_choice","screen":"detail","target":"ballmaxxing","attemptId":a,"sessionId":ses,"occurredAt":ms()}])
         state="pending"
     else:
         a=ip["id"];state=ip.get("status","pending")
         if N:N(f"↩️ resume #{a} {state}")
-        events(t,h,[{"eventType":"cta_click","screen":"landing","target":"resume","attemptNumber":an,"sessionId":ses,"occurredAt":ms()},
-                    {"eventType":"screen_view","screen":"detail","attemptId":a,"sessionId":ses,"occurredAt":ms()}])
+        events(t,h,[{"eventType":"cta_click","screen":"landing","target":"resume","attemptNumber":an,"sessionId":ses,"occurredAt":ms()},{"eventType":"screen_view","screen":"detail","attemptId":a,"sessionId":ses,"occurredAt":ms()}])
         if state=="pending":
             events(t,h,[{"eventType":"path_choice","screen":"detail","target":"ballmaxxing","attemptId":a,"sessionId":ses,"occurredAt":ms()}])
     if state=="pending":
@@ -226,30 +212,20 @@ def attempt(acc,i,N=None,target=None):
         if not ss:
             if N:N("❌ ball fail")
             return False
-        gap(GS,"game",N,i)
-        to=random.randint(2000,4000)
+        gap(GS,"game",N,i);to=random.randint(2000,4000)
         brun(t,h,ss["sessionId"],ss["token"],to,GS*1000)
-        game(t,h,a,to,GS)
-        gap(GA,"register",N,i)
-        state="game_done"
+        game(t,h,a,to,GS);gap(GA,"register",N,i);state="game_done"
     if state in("pending","game_done"):
         events(t,h,[{"eventType":"ad_open","screen":"detail","target":"superOffer","attemptId":a,"sessionId":ses,"occurredAt":ms()}])
-        gap(AW,"ad",N,i)
-        r=adc(t,h,a);ns=(r.get("data") or {}).get("next_step")
+        gap(AW,"ad",N,i);r=adc(t,h,a);ns=(r.get("data") or {}).get("next_step")
         events(t,h,[{"eventType":"ad_earned","screen":"detail","target":"superOffer","attemptId":a,"sessionId":ses,"occurredAt":ms()}])
         state="ad_watched"
     ni=fl and (ns=="install_app" or ns is None)
     if state=="ad_watched" and ni:
         p,nm=INST.get(an,(f"com.filler.app{an}",f"App{an}"))
-        gap(IW,f"install {nm}",N,i)
-        ins(t,h,a,p,nm)
-        gap(UW,"usage",N,i)
-        usg(t,h,a)
-        state="used"
+        gap(IW,f"install {nm}",N,i);ins(t,h,a,p,nm);gap(UW,"usage",N,i);usg(t,h,a);state="used"
     elif state=="installed":
-        gap(UW,"usage",N,i)
-        usg(t,h,a)
-        state="used"
+        gap(UW,"usage",N,i);usg(t,h,a);state="used"
     gap(CG,"claim",N,i)
     r=claim(t,h,a,u);d=r.get("data") or {}
     if N:N(f"✅ coins={d.get('coins_awarded')} bal={d.get('new_coin_balance')} cd={d.get('cooldown_hours')}h")
@@ -258,18 +234,17 @@ def attempt(acc,i,N=None,target=None):
 
 def go_stage(ch,i,n):
     a=dbgt(i)
-    if not a:return tgs(ch,"not found")
+    if not a:return tgs(ch,"nf")
     def N(m):tgs(ch,f"*#{i}* {m}")
     def j():
-        tgs(ch,f"*#{i}* ▶️ stage {n}…")
+        tgs(ch,f"*#{i}* ▶️ stage {n}")
         try:ok=attempt(a,i,N,target=n);tgs(ch,f"*#{i}* stage {n} {'✅' if ok else '❌'}",kstg(i))
         except Stop:tgs(ch,f"*#{i}* 🛑",kstg(i))
         except Exception as e:tgs(ch,f"*#{i}* 💥 {e}")
-    if not sp(i,j):tgs(ch,f"*#{i}* busy — tap STOP first")
-
+    if not sp(i,j):tgs(ch,f"*#{i}* busy")
 def gfarm(ch,i):
     a=dbgt(i)
-    if not a:return tgs(ch,"not found")
+    if not a:return tgs(ch,"nf")
     def N(m):tgs(ch,f"*#{i}* {m}")
     def j():
         tgs(ch,f"*#{i}* 💰")
@@ -278,47 +253,124 @@ def gfarm(ch,i):
         except Exception as e:tgs(ch,f"*#{i}* 💥 {e}")
     if not sp(i,j):tgs(ch,f"*#{i}* busy")
 
+def v_pr(ch,i):
+    a=dbgt(i)
+    if not a:return
+    _,n,t,u,h=a;r=me(t,h)
+    if not r.get("success"):return tgs(ch,f"❌ {r.get('message')}")
+    d=r["data"]
+    tgs(ch,f"*#{i} {n}*\nname:{d.get('name')}\nemail:{d.get('email')}\nphone:{d.get('phone') or '-'}\nstatus:{d.get('status')}\ncoins:*{d.get('coinBalance')}*\ntickets:{d.get('ticketBalance',0)}\nref:`{d.get('referralCode')}`\njoined:{str(d.get('createdAt'))[:10]}\nfp:`dev_{h}|{BR}|{MD}|{AV}`",kstg(i))
+
+def v_pk(ch,i):
+    a=dbgt(i)
+    if not a:return
+    _,n,t,u,h=a;m=me(t,h);bal=(m.get("data") or {}).get("coinBalance",0)
+    r=pkg(t,h)
+    if not r.get("success"):return tgs(ch,f"❌ {r.get('message')}")
+    pl=sorted([p for p in r["data"] if not p.get("lockedForUser") and p.get("coinsRequired",0)<=bal],key=lambda p:p.get("coinsRequired",0))
+    if not pl:return tgs(ch,f"*#{i}* bal={bal}c — none affordable",kstg(i))
+    rows=[[{"text":f"{p['coinsRequired']}c→₹{p['amountInr']} {p['name'][:20]}","callback_data":f"pk:{i}:{j}"}] for j,p in enumerate(pl)]
+    rows.append([{"text":"◀️","callback_data":f"a:{i}"}])
+    tgs(ch,f"*#{i}* bal=*{bal}*c — pick:",{"inline_keyboard":rows})
+
+def v_rv(ch,i,ix):
+    a=dbgt(i)
+    if not a:return
+    _,n,t,u,h=a;r=pkg(t,h)
+    if not r.get("success"):return tgs(ch,f"❌ {r.get('message')}")
+    pl=sorted([p for p in r["data"] if not p.get("lockedForUser")],key=lambda p:p.get("coinsRequired",0))
+    if ix>=len(pl):return tgs(ch,"bad idx")
+    p=pl[ix];m=me(t,h);em=(m.get("data") or {}).get("email","")
+    L=[f"*Redeem #{i}*",f"pkg:*{p['name']}*",f"cost:{p['coinsRequired']}c",f"val:₹{p['amountInr']}",f"type:{p.get('type')}"]
+    for f in (p.get("customFields") or []):
+        k=f.get("key");v=em if k=="email" else "-"
+        L.append(f"{f.get('label',k)}:`{v}`")
+    tgs(ch,"\n".join(L),{"inline_keyboard":[[{"text":"✅ Confirm","callback_data":f"rk:{i}:{ix}"}],[{"text":"❌","callback_data":f"pl:{i}"}]]})
+
+def do_rd(ch,i,ix):
+    a=dbgt(i)
+    if not a:return
+    _,n,t,u,h=a;r=pkg(t,h)
+    if not r.get("success"):return tgs(ch,f"❌ {r.get('message')}")
+    pl=sorted([p for p in r["data"] if not p.get("lockedForUser")],key=lambda p:p.get("coinsRequired",0))
+    if ix>=len(pl):return tgs(ch,"bad idx")
+    p=pl[ix];m=me(t,h);em=(m.get("data") or {}).get("email","")
+    fl={f.get("key"):(em if f.get("key")=="email" else "") for f in (p.get("customFields") or [])}
+    tgs(ch,f"⏳ redeeming #{i} {p['name']}")
+    rr=rdm(t,h,p["id"],p["coinsRequired"],fl,p.get("type","GIFT_CARD"),str(uuid.uuid4()))
+    if rr.get("success"):
+        d=rr.get("data") or {}
+        tgs(ch,f"✅ *redeemed #{i}*\nstatus:*{d.get('status')}*\ncoins:{d.get('coinsRedeemed')}\nval:₹{d.get('amountInr')}\ncode:`{d.get('voucherCode') or d.get('xoxodayVoucherCode') or '-'}`\npin:`{d.get('voucherPin') or d.get('xoxodayVoucherPin') or '-'}`\nid:`{d.get('redemptionId') or d.get('id') or '-'}`",kstg(i))
+    else:tgs(ch,f"❌ *redeem failed*\n{rr.get('message') or rr}",kstg(i))
+
+def v_hs(ch,i,pg=1):
+    a=dbgt(i)
+    if not a:return
+    _,n,t,u,h=a;r=hist(t,h,pg,10)
+    if not r.get("success"):return tgs(ch,f"❌ {r.get('message')}")
+    d=r["data"];rs=d.get("redemptions") or []
+    L=[f"*#{i} hist* {d.get('total',0)} · pg {d.get('page')}/{d.get('pages')}"]
+    if not rs:L.append("_empty_")
+    for x in rs[:10]:
+        L.append(f"• `{str(x.get('createdAt'))[:16]}` {x.get('productName') or x.get('type')}")
+        L.append(f"  {x.get('coinsRedeemed')}c→₹{x.get('amountInr')} *{x.get('status')}*")
+        if x.get("voucherCode"):L.append(f"  code:`{x['voucherCode']}`")
+    tgs(ch,"\n".join(L),{"inline_keyboard":[[{"text":"◀️","callback_data":f"hs:{i}:{max(1,pg-1)}"},{"text":"▶️","callback_data":f"hs:{i}:{pg+1}"}],[{"text":"🔙","callback_data":f"a:{i}"}]]})
+
+def v_fr(ch,i):
+    a=dbgt(i)
+    if not a:return
+    _,n,t,u,h=a;r=hist(t,h,1,20)
+    if not r.get("success"):return tgs(ch,f"❌ {r.get('message')}")
+    rs=(r["data"].get("redemptions") or [])[:20]
+    if not rs:return tgs(ch,f"*#{i}* no history",kstg(i))
+    L=[f"*#{i} fraud*"]
+    for x in rs:
+        sc=x.get("fraudScoreSnapshot");sc="-" if sc is None else str(sc)
+        L.append(f"• `{str(x.get('createdAt'))[:10]}` score=*{sc}* {x.get('status')} ₹{x.get('amountInr')}")
+        if x.get("failureReason"):L.append(f"  fail:{x['failureReason']}")
+        if x.get("reviewReason"):L.append(f"  review:{x['reviewReason']}")
+        if x.get("fraudReasons"):L.append(f"  fraud:{json.dumps(x['fraudReasons'])[:100]}")
+        if x.get("adminNote"):L.append(f"  admin:{x['adminNote']}")
+    tgs(ch,"\n".join(L),kstg(i))
+
 def km():
     r=[[{"text":("🟢 " if run(i) else "")+n,"callback_data":f"a:{i}"}] for i,n,u in dbls()]
     r+=[[{"text":"➕ Add","callback_data":"add"}],[{"text":"🔄","callback_data":"home"}]]
     return{"inline_keyboard":r}
 
 def kstg(i):
-    a=dbgt(i)
-    cur=None
+    a=dbgt(i);cur=None
     try:
         if a:cur=st(a[2],a[4])["attemptNumber"]
     except:pass
-    rows=[]
-    line=[]
+    rows=[];line=[]
     for n in range(1,21):
-        mark=""
+        mk=""
         if cur is not None:
-            if n<cur:mark="✅ "
-            elif n==cur:mark="▶️ "
-        line.append({"text":f"{mark}{n}","callback_data":f"sg:{i}:{n}"})
+            if n<cur:mk="✅ "
+            elif n==cur:mk="▶️ "
+        line.append({"text":f"{mk}{n}","callback_data":f"sg:{i}:{n}"})
         if len(line)==5:rows.append(line);line=[]
     if line:rows.append(line)
     top=[]
     if run(i):top.append([{"text":"🛑 STOP","callback_data":f"st:{i}"}])
-    top.append([{"text":"💰 Farm gems","callback_data":f"f:{i}"}])
-    top.append([{"text":"📊 Status","callback_data":f"s:{i}"}])
-    top.append([{"text":"🗑 Remove","callback_data":f"x:{i}"}])
+    top.append([{"text":"👤 Profile","callback_data":f"pr:{i}"},{"text":"📦 Packages","callback_data":f"pl:{i}"}])
+    top.append([{"text":"📜 History","callback_data":f"hs:{i}:1"},{"text":"🕵️ Fraud","callback_data":f"fr:{i}"}])
+    top.append([{"text":"💰 Farm","callback_data":f"f:{i}"},{"text":"🗑","callback_data":f"x:{i}"}])
     return{"inline_keyboard":top+rows+[[{"text":"◀️ Back","callback_data":"home"}]]}
 
 def krm(i):return{"inline_keyboard":[[{"text":"✅","callback_data":f"y:{i}"}],[{"text":"❌","callback_data":f"a:{i}"}]]}
-
 def mt():
     a=dbls();L=[f"*OP v{V}*","",f"*{len(a)}* accounts",""]
     if not a:L.append("_none_")
     else:
         for i,n,u in a:
             cur="?"
-            try:cur=st(dbgt(i)[2],dbgt(i)[4])["attemptNumber"]
+            try:g=dbgt(i);cur=st(g[2],g[4])["attemptNumber"]
             except:pass
             L.append(f"*#{i}* `{(u or '')[:12]}…` stage {cur}/20{' 🟢' if run(i) else ''}")
     return"\n".join(L)
-
 def atx(i):
     a=dbgt(i)
     if not a:return"_nf_"
@@ -338,7 +390,7 @@ def cb(c):
     elif d.startswith("s:"):i=int(d[2:]);tga(ci,"…");tge(ch,mi,atx(i),kstg(i))
     elif d.startswith("st:"):
         i=int(d[3:])
-        if run(i):rst(i);tga(ci,"🛑 stopping")
+        if run(i):rst(i);tga(ci,"🛑")
         else:tga(ci,"idle")
         time.sleep(.4);tge(ch,mi,atx(i),kstg(i))
     elif d.startswith("x:"):i=int(d[2:]);tga(ci);tge(ch,mi,f"Remove #{i}?",krm(i))
@@ -347,11 +399,17 @@ def cb(c):
         if run(i):rst(i)
         tga(ci,"rm" if dbdel(i) else "no");tge(ch,mi,mt(),km())
     elif d.startswith("sg:"):
-        _,si,sn=d.split(":")
-        i=int(si);n=int(sn)
-        tga(ci,f"stage {n}")
-        go_stage(ch,i,n)
+          _,si,sn=d.split(":");tga(ci,f"stage {sn}");go_stage(ch,int(si),int(sn))
     elif d.startswith("f:"):i=int(d[2:]);tga(ci,"…");gfarm(ch,i)
+    elif d.startswith("pr:"):i=int(d[3:]);tga(ci);v_pr(ch,i)
+    elif d.startswith("pl:"):i=int(d[3:]);tga(ci);v_pk(ch,i)
+    elif d.startswith("pk:"):
+        _,si,ni=d.split(":");tga(ci);v_rv(ch,int(si),int(ni))
+    elif d.startswith("rk:"):
+        _,si,ni=d.split(":");tga(ci,"…");do_rd(ch,int(si),int(ni))
+    elif d.startswith("hs:"):
+        _,si,pi=d.split(":");tga(ci);v_hs(ch,int(si),int(pi))
+    elif d.startswith("fr:"):i=int(d[3:]);tga(ci);v_fr(ch,i)
     else:tga(ci)
 
 def msg(m):
@@ -392,14 +450,12 @@ def poll():
                 except Exception as e:log("u",e)
         except requests.exceptions.ReadTimeout:continue
         except Exception as e:log("p",e);time.sleep(3)
-
 def boot():
     while True:
         try:
             if CHAT:tgs(CHAT,f"🚀 OP v{V}")
             poll()
         except Exception as e:log("boot",e);time.sleep(10)
-
 def seed():
     a=0
     for r in ACC:
@@ -418,8 +474,8 @@ def hlth():return"Active",200
 def statpage():return jsonify({"ok":True,"v":V,"n":len(dbls()),"run":[i for i,_,_ in dbls() if run(i)]})
 @app.route("/stop")
 def stp():os._exit(1)
-
 if __name__=="__main__":
     seed()
     threading.Thread(target=boot,daemon=True).start()
     app.run(host="0.0.0.0",port=PORT,threaded=True)
+```

@@ -68,7 +68,7 @@ def monitor_generation(conv_id, task_id):
 
 @app.route('/')
 def home():
-    return "Pavo Backend is Active! (Do not close this tab, your API is running here)."
+    return "Pavo Backend is Active and running perfectly!"
 
 @app.route('/api/generate', methods=['POST'])
 def generate():
@@ -85,7 +85,6 @@ def generate():
         r_conv = requests.post(conv_url, json=conv_payload, headers=get_headers(), timeout=20)
         conv_data = safe_json(r_conv)
         
-        # FIX: Safely get conversation_id
         try:
             conv_id = conv_data["data"]["conversation_id"]
         except KeyError:

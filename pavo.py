@@ -38,11 +38,17 @@ video_cache = {}
 
 def get_settings(uid):
     if uid not in user_settings:
-        user_settings[uid] = {"duration": 12, "ratio": "9:16", "image_url": None, "conversation_id": None, "mass_amount": 15}
+        user_settings[uid] = {
+            "duration": 12, 
+            "ratio": "9:16", 
+            "image_url": None, 
+            "conversation_id": None, 
+            "mass_amount": 15
+        }
     return user_settings[uid]
 
 # ==========================================
-# FAKE WEB SERVER (Render)
+# FAKE WEB SERVER (For Render)
 # ==========================================
 async def web_server():
     async def handle(request): return web.Response(text="Pavo Bot is alive!")
@@ -55,7 +61,7 @@ async def web_server():
     await site.start()
 
 # ==========================================
-# PAVO API CLIENT
+# PAVO API CLIENT (Fully Fixed Prompts)
 # ==========================================
 class PavoClient:
     def __init__(self):
@@ -85,24 +91,48 @@ class PavoClient:
     async def get_conversation_videos(self, conv_id):
         data = await self.request("GET", f"/api/v1/chat/conversation/history?conversation_id={conv_id}")
         videos = []
+        
         for turn in data.get("turns", []):
             prompt_text = "Unknown"
+            
+            # 1. Try to find prompt in user "Message"
             for user_msg in turn.get("user", []):
-                if user_msg["type"] == "Message" and "content" in user_msg.get("data", {}):
+                if user_msg.get("type") == "Message" and "content" in user_msg.get("data", {}):
                     prompt_text = user_msg["data"]["content"]
                     break
+                # Fallback: Check if it's inside the creative_prompt_json
+                elif user_msg.get("type") == "creative_prompt":
+                    try:
+                        cp_json = json.loads(user_msg["data"].get("creative_prompt_json", "[]"))
+                        if cp_json and "content" in cp_json[0]:
+                            prompt_text = cp_json[0]["content"]
+                            break
+                    except: pass
+            
+            # 2. Extract Video URL and Settings
             for msg in turn.get("assistant", []):
                 if msg["type"] == "GenerationSuccess":
                     results = msg["data"].get("data", {}).get("results", [])
                     duration, ratio = 12, "9:16"
+                    
                     for a_msg in turn.get("assistant", []):
                         if a_msg["type"] == "GenerationStart":
                             duration = a_msg["data"].get("duration", 12)
                             ratio = a_msg["data"].get("ratio", "9:16")
+                            if a_msg["data"].get("prompt"):
+                                prompt_text = a_msg["data"]["prompt"]
                             break
+                            
                     for res in results:
                         if res.get("url"):
-                            videos.append({"url": res["url"], "prompt": prompt_text, "duration": duration, "ratio": ratio, "conv_id": conv_id, "image_url": None})
+                            videos.append({
+                                "url": res["url"], 
+                                "prompt": prompt_text, 
+                                "duration": duration, 
+                                "ratio": ratio, 
+                                "conv_id": conv_id, 
+                                "image_url": None
+                            })
         return videos
 
     async def upload_image(self, image_bytes, filename):
@@ -193,14 +223,14 @@ def video_action_keyboard(vid_id):
     ])
 
 # ==========================================
-# WORKER: Generates & Polls 1 Video
+# WORKERS: Generate & Poll Videos
 # ==========================================
 async def background_worker(message: Message, prompt: str, duration: int, ratio: str, image_url: str):
     client = PavoClient()
     try:
         conv_id, task_id = await client.start_video(prompt, duration, ratio, image_url)
     except Exception:
-        return
+        return # If queue is full instantly, abandon this thread silently
     
     wait_time = 0
     while wait_time < 1200:
@@ -430,3 +460,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+
+

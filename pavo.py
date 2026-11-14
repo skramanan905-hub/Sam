@@ -13,10 +13,14 @@ API_BASE = "https://api.pixa-ai.work"
 
 def get_headers(token):
     return {
-        "x-platform": "1", "x-user-language": "en", "x-app-timezone": "Asia/Calcutta",
-        "origin": "https://app.pavo-ai.work", "referer": "https://app.pavo-ai.work/",
+        "x-platform": "1",
+        "x-user-language": "en",
+        "x-app-timezone": "Asia/Calcutta",
+        "origin": "https://app.pavo-ai.work",
+        "referer": "https://app.pavo-ai.work/",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "content-type": "application/json", "accept": "*/*",
+        "content-type": "application/json",
+        "accept": "*/*",
         "authorization": f"Bearer {token}"
     }
 
@@ -34,23 +38,30 @@ def check_task_in_history(conv_id, task_id, token):
     r = requests.get(url, headers=get_headers(token), timeout=20)
     data = safe_json(r)
 
-    # FIX: turns is inside data["data"]["turns"]
-    turns = data.get("data", {}).get("turns", [])
+    turns = (data.get("data") or {}).get("turns") or []
     if not turns:
         return None
 
     for turn in reversed(turns):
-        for msg in turn.get("assistant", []):
+        asst_msgs = turn.get("assistant") or []
+        turn_has_task = any(
+            (m.get("data") or {}).get("task_id") == task_id for m in asst_msgs
+        )
+        for msg in asst_msgs:
             m_type = msg.get("type")
-            m_data = msg.get("data", {})
+            m_data = msg.get("data") or {}
             if m_type == "GenerationSuccess" and m_data.get("task_id") == task_id:
-                results = m_data.get("data", {}).get("results", [])
+                results = (m_data.get("data") or {}).get("results") or []
                 if results and results[0].get("url"):
-                    return {"status": "success", "url": results[0]["url"]}
+                    return {
+                        "status": "success",
+                        "url": results[0]["url"],
+                        "mimetype": results[0].get("mimetype", "video/mp4")
+                    }
             elif m_type == "GenerationFailed" and m_data.get("task_id") == task_id:
                 err = m_data.get("error_message") or m_data.get("error") or "Queue is full"
                 return {"status": "failed", "error": err}
-            elif m_type == "PromptSafetyBlocked":
+            elif m_type == "PromptSafetyBlocked" and turn_has_task:
                 err = m_data.get("error_message") or m_data.get("error") or "Prompt blocked"
                 return {"status": "failed", "error": err}
     return None
@@ -63,7 +74,8 @@ def monitor_generation(conv_id, task_id, token):
         try:
             res = check_task_in_history(conv_id, task_id, token)
             if res:
-                video_cache[task_id].update(res)
+                if task_id in video_cache:
+                    video_cache[task_id].update(res)
                 return
         except Exception:
             pass
@@ -78,7 +90,7 @@ def home():
 @app.route('/api/generate', methods=['POST'])
 def generate():
     try:
-        d = request.json
+        d = request.json or {}
         token = d.get("token")
         if not token:
             return jsonify({"status": "error", "message": "JWT Token is required"})
@@ -90,7 +102,7 @@ def generate():
         existing_conv_id = d.get("conv_id")
         is_spam = bool(d.get("is_spam", False))
 
-        # FIX: In spam mode, ALWAYS create a brand-new conversation
+        # Always create a new conversation if spam mode or no existing_conv_id
         if existing_conv_id and not is_spam:
             conv_id = existing_conv_id
             if not image_url and conv_id in conversation_images:
@@ -105,9 +117,8 @@ def generate():
                 timeout=20
             )
             conv_data = safe_json(r_conv)
-            try:
-                conv_id = conv_data["data"]["conversation_id"]
-            except KeyError:
+            conv_id = (conv_data.get("data") or {}).get("conversation_id")
+            if not conv_id:
                 return jsonify({"status": "error", "message": f"Invalid Token or API Error: {conv_data}"})
 
         if image_url:
@@ -156,25 +167,26 @@ def generate():
                     try:
                         evt = json.loads(line_str[5:].strip())
                         etype = evt.get("type")
-                        if etype == "MessageDelta" and "content" in evt.get("data", {}):
+                        if etype == "MessageDelta" and "content" in (evt.get("data") or {}):
                             stream_text = evt["data"]["content"]
                         elif etype == "GenerationStart":
                             task_id = evt.get("task_id")
                             break
                         elif etype in ["GenerationFailed", "PromptSafetyBlocked"]:
+                            edata = evt.get("data") or {}
                             err_msg = (
-                                evt.get("data", {}).get("error_message")
-                                or evt.get("data", {}).get("error")
+                                edata.get("error_message")
+                                or edata.get("error")
                                 or evt.get("error_message")
                                 or evt.get("error")
                                 or "Failed"
                             )
-                            return jsonify({"status": "error", "message": err_msg, "text": stream_text})
+                            return jsonify({"status": "error", "message": err_msg, "text": stream_text, "conv_id": conv_id})
                     except Exception:
                         pass
 
         if not task_id:
-            return jsonify({"status": "error", "message": "Failed to start generation stream.", "text": stream_text})
+            return jsonify({"status": "error", "message": "Failed to start generation stream.", "text": stream_text, "conv_id": conv_id})
 
         video_cache[task_id] = {"status": "queued", "conv_id": conv_id, "text": stream_text}
         threading.Thread(target=monitor_generation, args=(conv_id, task_id, token), daemon=True).start()
@@ -190,7 +202,6 @@ def check_status(task_id):
     if cached and cached.get("status") != "queued":
         return jsonify(cached)
 
-    # Fallback: directly check Pixa history if cache was missed (e.g. Render restart / multi-worker)
     conv_id = request.args.get("conv_id") or (cached.get("conv_id") if cached else None)
     token = request.headers.get("X-Pavo-Token")
     if conv_id and token:
@@ -226,14 +237,18 @@ def upload():
             timeout=20
         )
         pre_data = safe_json(r_pre)
-        requests.put(pre_data["data"]["upload_url"], data=file.read(), headers={"Content-Type": ctype}, timeout=30)
+        pdata = pre_data.get("data") or {}
+        if not pdata.get("upload_url"):
+            return jsonify({"status": "error", "message": f"Presign failed: {pre_data}"})
+
+        requests.put(pdata["upload_url"], data=file.read(), headers={"Content-Type": ctype}, timeout=30)
         requests.post(
             f"{API_BASE}/api/v1/file/inspect",
-            json={"content_type": ctype, "url": pre_data["data"]["public_url"]},
+            json={"content_type": ctype, "url": pdata["public_url"]},
             headers=get_headers(token),
             timeout=20
         )
-        return jsonify({"status": "success", "url": pre_data["data"]["public_url"]})
+        return jsonify({"status": "success", "url": pdata["public_url"]})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
@@ -246,7 +261,10 @@ def get_projects():
 
         r = requests.get(f"{API_BASE}/api/v1/chat/projects?page_size=50&page=1", headers=get_headers(token), timeout=20)
         data = safe_json(r)
-        return jsonify({"status": "success", "projects": data.get("data", {}).get("list", [])})
+        if data.get("code") != "000000":
+            return jsonify({"status": "error", "message": data.get("message") or "API Error"})
+
+        return jsonify({"status": "success", "projects": (data.get("data") or {}).get("list") or []})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
@@ -257,73 +275,89 @@ def get_videos(conv_id):
         if not token:
             return jsonify({"status": "error", "message": "Token missing in headers"})
 
-        r = requests.get(f"{API_BASE}/api/v1/chat/conversation/history?conversation_id={conv_id}", headers=get_headers(token), timeout=20)
+        r = requests.get(
+            f"{API_BASE}/api/v1/chat/conversation/history?conversation_id={conv_id}",
+            headers=get_headers(token),
+            timeout=20
+        )
         data = safe_json(r)
-        videos = []
-        saved_img = conversation_images.get(conv_id, None)
+        if data.get("code") != "000000":
+            return jsonify({"status": "error", "message": data.get("message") or data.get("_raw") or "Failed to load history"})
 
-        for turn in data.get("data", {}).get("turns", []):
+        conv_data = data.get("data") or {}
+        turns = conv_data.get("turns") or []
+        is_running = bool(conv_data.get("is_running", False))
+        saved_img = conversation_images.get(conv_id)
+
+        items = []
+        for idx, turn in enumerate(turns):
             prompt = "Unknown"
             turn_img = saved_img
-            for u_msg in turn.get("user", []):
-                if u_msg.get("type") == "Message":
-                    prompt = u_msg["data"].get("content", prompt)
-                elif u_msg.get("type") == "File":
-                    turn_img = u_msg["data"].get("url") or turn_img
+            for u_msg in (turn.get("user") or []):
+                utype = u_msg.get("type")
+                udata = u_msg.get("data") or {}
+                if utype == "Message":
+                    prompt = udata.get("content", prompt)
+                elif utype == "File" and udata.get("url"):
+                    turn_img = udata["url"]
 
-            asst_text = ""
+            text_parts = []
             task_id = None
-            found_terminal = False
+            media_url = None
+            media_mime = "video/mp4"
+            error_msg = None
 
-            for a_msg in turn.get("assistant", []):
+            for a_msg in (turn.get("assistant") or []):
                 atype = a_msg.get("type")
-                adata = a_msg.get("data", {})
+                adata = a_msg.get("data") or {}
                 if atype == "Message":
-                    asst_text = adata.get("content", "")
+                    content = adata.get("content", "")
+                    if content:
+                        text_parts.append(content)
                 elif atype == "GenerationStart":
-                    task_id = adata.get("task_id")
+                    task_id = adata.get("task_id") or task_id
                 elif atype == "GenerationSuccess":
-                    res = adata.get("data", {}).get("results", [])
-                    if res and res[0].get("url"):
-                        videos.append({
-                            "status": "success",
-                            "url": res[0]["url"],
-                            "prompt": prompt,
-                            "image_url": turn_img,
-                            "text": asst_text
-                        })
-                        found_terminal = True
+                    results = (adata.get("data") or {}).get("results") or []
+                    if results and results[0].get("url"):
+                        media_url = results[0]["url"]
+                        media_mime = results[0].get("mimetype", "video/mp4")
                 elif atype in ["GenerationFailed", "PromptSafetyBlocked"]:
-                    err = adata.get("error_message") or adata.get("error") or "Queue is full"
-                    videos.append({
-                        "status": "failed",
-                        "url": None,
-                        "prompt": prompt,
-                        "image_url": turn_img,
-                        "text": asst_text,
-                        "error": err
-                    })
-                    found_terminal = True
+                    error_msg = adata.get("error_message") or adata.get("error") or "Generation failed"
+                elif atype == "QuotaTryDeduct" and adata.get("deducted") is False and adata.get("insufficient_hint"):
+                    error_msg = adata["insufficient_hint"]
 
-            # FIX: Include turns that are still generating
-            if not found_terminal:
-                videos.append({
-                    "status": "processing",
-                    "task_id": task_id,
-                    "url": None,
-                    "prompt": prompt,
-                    "image_url": turn_img,
-                    "text": asst_text or "I am starting to prepare your creation..."
-                })
+            if media_url:
+                status = "success"
+            elif error_msg:
+                status = "failed"
+            elif task_id or (is_running and idx == len(turns) - 1):
+                status = "processing"
+            elif text_parts:
+                status = "text"
+            else:
+                status = "processing" if is_running else "failed"
+                if status == "failed":
+                    error_msg = "No result recorded for this turn."
 
-        return jsonify({"status": "success", "videos": videos})
+            items.append({
+                "status": status,
+                "task_id": task_id,
+                "url": media_url,
+                "mimetype": media_mime,
+                "prompt": prompt,
+                "image_url": turn_img,
+                "text": " ".join(text_parts),
+                "error": error_msg
+            })
+
+        return jsonify({"status": "success", "videos": items, "is_running": is_running})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
 @app.route('/api/delete_project', methods=['POST'])
 def delete_project():
     try:
-        d = request.json
+        d = request.json or {}
         token = d.get("token")
         conv_id = d.get("conv_id")
 

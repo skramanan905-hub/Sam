@@ -26,8 +26,11 @@ def safe_json(r):
     try: return r.json()
     except: return {"_raw": r.text, "_status": r.status_code}
 
+# Caches
 video_cache = {}
+conversation_images = {} # Remembers image for Regenerate
 
+# ================= MONITOR THREAD =================
 def monitor_generation(conv_id, task_id):
     wait_time = 0
     while wait_time < 1200: # 20 mins max
@@ -47,11 +50,11 @@ def monitor_generation(conv_id, task_id):
                     video_cache[task_id] = {
                         "status": "success",
                         "url": msg["data"]["data"]["results"][0]["url"],
-                        "prompt": msg["data"].get("prompt", "")
+                        "prompt": msg["data"].get("prompt", ""),
+                        "conv_id": conv_id
                     }
                     return
                 elif msg["type"] == "GenerationFailed" and msg["data"].get("task_id") == task_id:
-                    # Extract the exact error string
                     err_msg = msg["data"].get("error_message", "Queue is full")
                     video_cache[task_id] = {"status": "failed", "error": err_msg}
                     return
@@ -62,6 +65,10 @@ def monitor_generation(conv_id, task_id):
         video_cache[task_id] = {"status": "timeout", "error": "Timed out after 20 minutes"}
 
 # ================= ROUTES =================
+
+@app.route('/')
+def home():
+    return "Pavo Backend is Active! (Do not close this tab, your API is running here)."
 
 @app.route('/api/generate', methods=['POST'])
 def generate():
@@ -77,7 +84,16 @@ def generate():
         conv_payload = {"title": prompt[:60], "folder_id": "", "kb_strict": False}
         r_conv = requests.post(conv_url, json=conv_payload, headers=get_headers(), timeout=20)
         conv_data = safe_json(r_conv)
-        conv_id = conv_data["data"]["conversation_id"]
+        
+        # FIX: Safely get conversation_id
+        try:
+            conv_id = conv_data["data"]["conversation_id"]
+        except KeyError:
+            return jsonify({"status": "error", "message": f"API Error: {conv_data}"})
+
+        # Save image to memory for regeneration
+        if image_url:
+            conversation_images[conv_id] = image_url
 
         # 2. Start Video Generation
         stream_url = f"{API_BASE}/api/v1/chat/stream"
@@ -107,7 +123,7 @@ def generate():
                         except: pass
 
         if not task_id:
-            return jsonify({"status": "error", "message": "Failed to start generation"})
+            return jsonify({"status": "error", "message": "Failed to start generation stream."})
 
         video_cache[task_id] = {"status": "queued"}
         threading.Thread(target=monitor_generation, args=(conv_id, task_id), daemon=True).start()
@@ -128,7 +144,6 @@ def upload():
             return jsonify({"status": "error", "message": "No file"})
         file = request.files['image']
         
-        # Step 1: Presigned
         pre_url = f"{API_BASE}/api/v1/file/presigned-url"
         pre_payload = {"purpose": "chat_attachment", "content_type": "image/jpeg", "filename": "upload.jpg"}
         r_pre = requests.post(pre_url, json=pre_payload, headers=get_headers(), timeout=20)
@@ -137,10 +152,8 @@ def upload():
         upload_url = pre_data["data"]["upload_url"]
         public_url = pre_data["data"]["public_url"]
 
-        # Step 2: PUT to AWS
         requests.put(upload_url, data=file.read(), headers={"Content-Type": "image/jpeg"}, timeout=20)
         
-        # Step 3: Inspect
         inspect_url = f"{API_BASE}/api/v1/file/inspect"
         inspect_payload = {"content_type": "image/jpeg", "url": public_url}
         requests.post(inspect_url, json=inspect_payload, headers=get_headers(), timeout=20)
@@ -165,6 +178,9 @@ def get_videos(conv_id):
         data = safe_json(r)
         videos = []
         
+        # Check if we have an image saved for this conv
+        saved_img = conversation_images.get(conv_id, None)
+
         for turn in data.get("data", {}).get("turns", []):
             prompt = "Unknown"
             for u_msg in turn.get("user", []):
@@ -175,7 +191,7 @@ def get_videos(conv_id):
                 if a_msg["type"] == "GenerationSuccess":
                     res = a_msg["data"]["data"]["results"]
                     if res and res[0].get("url"):
-                        videos.append({"url": res[0]["url"], "prompt": prompt})
+                        videos.append({"url": res[0]["url"], "prompt": prompt, "image_url": saved_img})
                         
         return jsonify({"status": "success", "videos": videos})
     except Exception as e:

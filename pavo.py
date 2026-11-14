@@ -11,16 +11,15 @@ CORS(app)
 
 # ================= CONFIGURATION =================
 API_BASE = "https://api.pixa-ai.work"
-# Updated with the NEW token from pavo2.txt
-PIXA_JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmMTcwYjczYy1jNTk2LTQ5MDctYjFhOC0zYzgyMTRhYTQ3OGYiLCJleHAiOjE3OTcwNjA1NDEsIm5iZiI6MTc5NDY0MTM0MSwiaWF0IjoxNzk0NjQxMzQxfQ.D-nkf3_jTyztGuP5XcKDNEecoBsUdPLYJMqtRk83KtU"
+# Token is no longer hardcoded here. It comes from the frontend.
 
-def get_headers():
+def get_headers(token):
     return {
         "x-platform": "1", "x-user-language": "en", "x-app-timezone": "Asia/Calcutta",
         "origin": "https://app.pavo-ai.work", "referer": "https://app.pavo-ai.work/",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "content-type": "application/json", "accept": "*/*",
-        "authorization": f"Bearer {PIXA_JWT_TOKEN}"
+        "authorization": f"Bearer {token}"
     }
 
 def safe_json(r):
@@ -31,14 +30,14 @@ def safe_json(r):
 video_cache = {}
 conversation_images = {} 
 
-def monitor_generation(conv_id, task_id):
+def monitor_generation(conv_id, task_id, token):
     wait_time = 0
     while wait_time < 1200:
         time.sleep(10)
         wait_time += 10
         try:
             url = f"{API_BASE}/api/v1/chat/conversation/history?conversation_id={conv_id}"
-            r = requests.get(url, headers=get_headers(), timeout=20)
+            r = requests.get(url, headers=get_headers(token), timeout=20)
             data = safe_json(r)
             
             turns = data.get("turns", [])
@@ -70,6 +69,10 @@ def home():
 def generate():
     try:
         d = request.json
+        token = d.get("token")
+        if not token:
+            return jsonify({"status": "error", "message": "JWT Token is required"})
+
         prompt = d.get("prompt")
         duration = int(d.get("duration", 12))
         ratio = d.get("ratio", "9:16")
@@ -82,14 +85,13 @@ def generate():
                 image_url = conversation_images[conv_id]
         else:
             conv_url = f"{API_BASE}/api/v1/chat/conversation"
-            # New format observed in pavo2.txt: {"title":"[{\"type\":\"text\",\"content\":\"...\"}]"}
             title_json = json.dumps([{"type": "text", "content": prompt[:60]}])
-            r_conv = requests.post(conv_url, json={"title": title_json, "folder_id": "", "kb_strict": False}, headers=get_headers(), timeout=20)
+            r_conv = requests.post(conv_url, json={"title": title_json, "folder_id": "", "kb_strict": False}, headers=get_headers(token), timeout=20)
             conv_data = safe_json(r_conv)
             try:
                 conv_id = conv_data["data"]["conversation_id"]
             except KeyError:
-                return jsonify({"status": "error", "message": f"API Error: {conv_data}"})
+                return jsonify({"status": "error", "message": f"Invalid Token or API Error: {conv_data}"})
 
         if image_url:
             conversation_images[conv_id] = image_url
@@ -108,7 +110,7 @@ def generate():
         task_id = None
         stream_text = "I am starting to prepare your creation..."
         
-        with requests.post(stream_url, json=payload, headers={**get_headers(), "accept": "text/event-stream"}, stream=True, timeout=30) as r:
+        with requests.post(stream_url, json=payload, headers={**get_headers(token), "accept": "text/event-stream"}, stream=True, timeout=30) as r:
             for line in r.iter_lines():
                 if line:
                     line_str = line.decode('utf-8')
@@ -128,7 +130,7 @@ def generate():
             return jsonify({"status": "error", "message": "Failed to start generation stream.", "text": stream_text})
 
         video_cache[task_id] = {"status": "queued", "conv_id": conv_id, "text": stream_text}
-        threading.Thread(target=monitor_generation, args=(conv_id, task_id), daemon=True).start()
+        threading.Thread(target=monitor_generation, args=(conv_id, task_id, token), daemon=True).start()
 
         return jsonify({"status": "success", "task_id": task_id, "conv_id": conv_id, "text": stream_text})
 
@@ -142,13 +144,16 @@ def check_status(task_id):
 @app.route('/api/upload', methods=['POST'])
 def upload():
     try:
+        token = request.form.get("token")
+        if not token: return jsonify({"status": "error", "message": "Token required"})
         if 'image' not in request.files: return jsonify({"status": "error", "message": "No file"})
+        
         file = request.files['image']
         pre_url = f"{API_BASE}/api/v1/file/presigned-url"
-        r_pre = requests.post(pre_url, json={"purpose": "chat_attachment", "content_type": "image/jpeg", "filename": "upload.jpg"}, headers=get_headers(), timeout=20)
+        r_pre = requests.post(pre_url, json={"purpose": "chat_attachment", "content_type": "image/jpeg", "filename": "upload.jpg"}, headers=get_headers(token), timeout=20)
         pre_data = safe_json(r_pre)
         requests.put(pre_data["data"]["upload_url"], data=file.read(), headers={"Content-Type": "image/jpeg"}, timeout=20)
-        requests.post(f"{API_BASE}/api/v1/file/inspect", json={"content_type": "image/jpeg", "url": pre_data["data"]["public_url"]}, headers=get_headers(), timeout=20)
+        requests.post(f"{API_BASE}/api/v1/file/inspect", json={"content_type": "image/jpeg", "url": pre_data["data"]["public_url"]}, headers=get_headers(token), timeout=20)
         return jsonify({"status": "success", "url": pre_data["data"]["public_url"]})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
@@ -156,7 +161,11 @@ def upload():
 @app.route('/api/history', methods=['GET'])
 def get_projects():
     try:
-        r = requests.get(f"{API_BASE}/api/v1/chat/projects?page_size=50&page=1", headers=get_headers(), timeout=20)
+        # We read the token from the custom header sent by the frontend
+        token = request.headers.get("X-Pavo-Token")
+        if not token: return jsonify({"status": "error", "message": "Token missing in headers"})
+        
+        r = requests.get(f"{API_BASE}/api/v1/chat/projects?page_size=50&page=1", headers=get_headers(token), timeout=20)
         data = safe_json(r)
         return jsonify({"status": "success", "projects": data["data"].get("list", [])})
     except Exception as e:
@@ -165,7 +174,10 @@ def get_projects():
 @app.route('/api/videos/<conv_id>', methods=['GET'])
 def get_videos(conv_id):
     try:
-        r = requests.get(f"{API_BASE}/api/v1/chat/conversation/history?conversation_id={conv_id}", headers=get_headers(), timeout=20)
+        token = request.headers.get("X-Pavo-Token")
+        if not token: return jsonify({"status": "error", "message": "Token missing in headers"})
+        
+        r = requests.get(f"{API_BASE}/api/v1/chat/conversation/history?conversation_id={conv_id}", headers=get_headers(token), timeout=20)
         data = safe_json(r)
         videos = []
         saved_img = conversation_images.get(conv_id, None)
@@ -191,15 +203,15 @@ def get_videos(conv_id):
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
-# 🔥 NEW ROUTE: Delete Project
 @app.route('/api/delete_project', methods=['POST'])
 def delete_project():
     try:
         d = request.json
+        token = d.get("token")
         conv_id = d.get("conv_id")
         
         url = f"{API_BASE}/api/v1/chat/projects?id={conv_id}&type=ai_creation"
-        r = requests.delete(url, headers=get_headers(), timeout=20)
+        r = requests.delete(url, headers=get_headers(token), timeout=20)
         data = safe_json(r)
         
         if data.get("code") == "000000":

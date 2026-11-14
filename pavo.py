@@ -9,9 +9,7 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-# ================= CONFIGURATION =================
 API_BASE = "https://api.pixa-ai.work"
-# Token is no longer hardcoded here. It comes from the frontend.
 
 def get_headers(token):
     return {
@@ -26,7 +24,6 @@ def safe_json(r):
     try: return r.json()
     except: return {"_raw": r.text, "_status": r.status_code}
 
-# Caches
 video_cache = {}
 conversation_images = {} 
 
@@ -59,8 +56,6 @@ def monitor_generation(conv_id, task_id, token):
     if task_id in video_cache and video_cache[task_id]["status"] == "queued":
         video_cache[task_id]["status"] = "timeout"
 
-# ================= ROUTES =================
-
 @app.route('/')
 def home():
     return "Pavo Backend is Active!"
@@ -78,8 +73,10 @@ def generate():
         ratio = d.get("ratio", "9:16")
         image_url = d.get("image_url")
         existing_conv_id = d.get("conv_id") 
+        is_spam = d.get("is_spam", False) # 🔥 NEW FLAG
         
-        if existing_conv_id:
+        # 🔥 FIX: If it's spam mode, force a new conversation. Otherwise, reuse if provided.
+        if existing_conv_id and not is_spam:
             conv_id = existing_conv_id
             if not image_url and conv_id in conversation_images:
                 image_url = conversation_images[conv_id]
@@ -161,7 +158,6 @@ def upload():
 @app.route('/api/history', methods=['GET'])
 def get_projects():
     try:
-        # We read the token from the custom header sent by the frontend
         token = request.headers.get("X-Pavo-Token")
         if not token: return jsonify({"status": "error", "message": "Token missing in headers"})
         

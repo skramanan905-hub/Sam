@@ -132,7 +132,13 @@ class PavoClient:
 # WEB API ENDPOINTS
 # ==========================================
 async def index_handler(request):
+    # Ensure index.html exists in the same folder
+    if not os.path.exists('index.html'):
+        return web.Response(text="Error: index.html not found in repository!", status=404)
     return web.FileResponse('./index.html')
+
+async def health_check(request):
+    return web.Response(text="OK")
 
 async def api_history(request):
     client = PavoClient()
@@ -176,7 +182,6 @@ async def api_generate(request):
         client = PavoClient()
         conv_id, task_id = await client.start_video(prompt, duration, ratio, image_url)
         
-        # Start background queue monitor
         asyncio.create_task(monitor_and_notify(conv_id, task_id, prompt, chat_id))
         
         return web.json_response({"status": "success", "task_id": task_id})
@@ -203,7 +208,10 @@ async def monitor_and_notify(conv_id, task_id, prompt, chat_id):
 # ==========================================
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    # 🔥 HERE IS THE URL 🔥
     url = "https://sam-8-7lpn.onrender.com"
+    
+    # Telegram WebApp requires HTTPS
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🎬 Open Pavo AI App", web_app=web.WebAppInfo(url=url))]])
     await message.answer("Welcome! Click below to open the full Pavo AI interface directly in Telegram:", reply_markup=kb)
 
@@ -213,6 +221,7 @@ async def cmd_start(message: Message):
 async def main():
     app = web.Application()
     app.router.add_get('/', index_handler)
+    app.router.add_get('/health', health_check) # Render Health Check
     app.router.add_get('/api/history', api_history)
     app.router.add_get('/api/videos', api_videos)
     app.router.add_post('/api/upload', api_upload)
@@ -220,13 +229,15 @@ async def main():
     
     runner = web.AppRunner(app)
     await runner.setup()
+    
+    # Render assigns a PORT dynamically. We MUST bind to it.
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
-    log.info(f"Web UI running on port {port}")
+    log.info(f"✅ Web server successfully bound to port {port}")
     
     await bot.delete_webhook(drop_pending_updates=True)
-    log.info("Bot polling started...")
+    log.info("🤖 Telegram Bot polling started...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

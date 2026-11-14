@@ -7,9 +7,7 @@ import aiohttp
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 # ==========================================
 # 🔥 CONFIGURATION 🔥
@@ -23,40 +21,6 @@ log = logging.getLogger("PavoBot")
 
 bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
-
-# ==========================================
-# STATE & DATA MANAGEMENT
-# ==========================================
-class UserStates(StatesGroup):
-    waiting_for_prompt = State()
-    waiting_for_image = State()
-    waiting_for_edit_prompt = State()
-    waiting_for_mass_prompt = State()
-    waiting_for_mass_count = State()
-
-user_settings = {}
-video_cache = {}
-
-def get_settings(uid):
-    if uid not in user_settings:
-        user_settings[uid] = {
-            "duration": 12, "ratio": "9:16", "image_url": None, 
-            "conversation_id": None, "mass_amount": 15
-        }
-    return user_settings[uid]
-
-# ==========================================
-# FAKE WEB SERVER (For Render)
-# ==========================================
-async def web_server():
-    async def handle(request): return web.Response(text="Pavo Bot is alive!")
-    app = web.Application()
-    app.router.add_get('/', handle)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
 
 # ==========================================
 # PAVO API CLIENT
@@ -92,8 +56,6 @@ class PavoClient:
         for turn in data.get("turns", []):
             prompt_text = "Unknown"
             image_url = None
-            
-            # 1. Extract Prompt & Image from User Turn
             for user_msg in turn.get("user", []):
                 if user_msg.get("type") == "Message" and "content" in user_msg.get("data", {}):
                     prompt_text = user_msg["data"]["content"]
@@ -102,30 +64,22 @@ class PavoClient:
                 elif user_msg.get("type") == "creative_prompt":
                     try:
                         cp_json = json.loads(user_msg["data"].get("creative_prompt_json", "[]"))
-                        if cp_json and "content" in cp_json[0]:
-                            prompt_text = cp_json[0]["content"]
+                        if cp_json and "content" in cp_json[0]: prompt_text = cp_json[0]["content"]
                     except: pass
             
-            # 2. Extract Video and Settings from Assistant Turn
             for msg in turn.get("assistant", []):
                 if msg["type"] == "GenerationSuccess":
                     results = msg["data"].get("data", {}).get("results", [])
                     duration, ratio = 12, "9:16"
-                    
                     for a_msg in turn.get("assistant", []):
                         if a_msg["type"] == "GenerationStart":
                             duration = a_msg["data"].get("duration", 12)
                             ratio = a_msg["data"].get("ratio", "9:16")
                             if a_msg["data"].get("prompt"): prompt_text = a_msg["data"]["prompt"]
                             break
-                            
                     for res in results:
                         if res.get("url"):
-                            videos.append({
-                                "url": res["url"], "prompt": prompt_text, 
-                                "duration": duration, "ratio": ratio, 
-                                "conv_id": conv_id, "image_url": image_url
-                            })
+                            videos.append({"url": res["url"], "prompt": prompt_text, "duration": duration, "ratio": ratio, "conv_id": conv_id, "image_url": image_url})
         return videos
 
     async def upload_image(self, image_bytes, filename):
@@ -136,11 +90,9 @@ class PavoClient:
         await self.request("POST", "/api/v1/file/inspect", {"content_type": "image/jpeg", "url": pre_data["public_url"]})
         return pre_data["public_url"]
 
-    async def start_video(self, prompt, duration, ratio, image_url=None, existing_conv_id=None):
-        conv_id = existing_conv_id
-        if not conv_id:
-            conv = await self.request("POST", "/api/v1/chat/conversation", {"title": prompt[:60], "folder_id": "", "kb_strict": False})
-            conv_id = conv["conversation_id"]
+    async def start_video(self, prompt, duration, ratio, image_url=None):
+        conv = await self.request("POST", "/api/v1/chat/conversation", {"title": prompt[:60], "folder_id": "", "kb_strict": False})
+        conv_id = conv["conversation_id"]
         
         payload = {
             "conversation_id": conv_id, "prompt": prompt, "mode": "omni_to_video",
@@ -165,67 +117,74 @@ class PavoClient:
         raise Exception("Stream ended unexpectedly.")
 
     async def check_status(self, conv_id, current_task_id):
-        try:
-            data = await self.request("GET", f"/api/v1/chat/conversation/history?conversation_id={conv_id}")
-            turns = data.get("turns", [])
-            if not turns: return None
-            last_turn = turns[-1]
-            for msg in last_turn.get("assistant", []):
-                if msg["type"] == "GenerationSuccess" and msg["data"].get("task_id") == current_task_id:
-                    return msg["data"]["data"]["results"][0]["url"]
-                elif msg["type"] == "GenerationFailed" and msg["data"].get("task_id") == current_task_id:
-                    raise Exception(msg["data"].get("error_message", "Generation Failed"))
-            return None
-        except Exception as e: raise e
+        data = await self.request("GET", f"/api/v1/chat/conversation/history?conversation_id={conv_id}")
+        turns = data.get("turns", [])
+        if not turns: return None
+        last_turn = turns[-1]
+        for msg in last_turn.get("assistant", []):
+            if msg["type"] == "GenerationSuccess" and msg["data"].get("task_id") == current_task_id:
+                return msg["data"]["data"]["results"][0]["url"]
+            elif msg["type"] == "GenerationFailed" and msg["data"].get("task_id") == current_task_id:
+                raise Exception(msg["data"].get("error_message", "Generation Failed"))
+        return None
 
 # ==========================================
-# KEYBOARDS (Step-by-Step Back Included)
+# WEB API ENDPOINTS
 # ==========================================
-def main_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎬 Generate New Video", callback_data="menu_gen")],
-        [InlineKeyboardButton(text="🚀 Mass Generate (Spam Mode)", callback_data="menu_mass")],
-        [InlineKeyboardButton(text="📁 Browse Projects", callback_data="menu_history")],
-        [InlineKeyboardButton(text="🌐 Global Video Search", callback_data="menu_all_history")]
-    ])
+async def index_handler(request):
+    return web.FileResponse('./index.html')
 
-def settings_menu(uid):
-    s = get_settings(uid)
-    img_status = "✅ Image Added" if s["image_url"] else "❌ No Image"
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"📸 {img_status}", callback_data="set_image")],
-        [InlineKeyboardButton(text=f"⏱ Duration: {s['duration']}s", callback_data="cycle_dur"), InlineKeyboardButton(text=f"📺 Ratio: {s['ratio']}", callback_data="cycle_rat")],
-        [InlineKeyboardButton(text="🚀 Start Generation", callback_data="do_generate")],
-        [InlineKeyboardButton(text="⬅️ Back to Main Menu", callback_data="menu_main")]
-    ])
-
-def mass_settings_menu(uid):
-    s = get_settings(uid)
-    img_status = "✅ Image Added" if s["image_url"] else "❌ No Image"
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"📸 {img_status}", callback_data="set_image")],
-        [InlineKeyboardButton(text=f"💥 Set Custom Threads", callback_data="set_mass_amt")],
-        [InlineKeyboardButton(text=f"⏱ Duration: {s['duration']}s", callback_data="cycle_dur"), InlineKeyboardButton(text=f"📺 Ratio: {s['ratio']}", callback_data="cycle_rat")],
-        [InlineKeyboardButton(text="💣 Start Mass Spam", callback_data="do_mass_generate")],
-        [InlineKeyboardButton(text="⬅️ Back to Main Menu", callback_data="menu_main")]
-    ])
-
-def video_action_keyboard(vid_id):
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✏️ Edit again", callback_data=f"edit_{vid_id}"), InlineKeyboardButton(text="🔄 Regenerate", callback_data=f"regen_{vid_id}")]
-    ])
-
-def cancel_kb():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Cancel & Back", callback_data="menu_main")]])
-
-# ==========================================
-# WORKERS: Generate & Poll Videos
-# ==========================================
-async def background_worker(message: Message, prompt: str, duration: int, ratio: str, image_url: str):
+async def api_history(request):
     client = PavoClient()
-    try: conv_id, task_id = await client.start_video(prompt, duration, ratio, image_url)
-    except Exception: return 
+    try:
+        projects = await client.get_projects()
+        return web.json_response({"status": "success", "projects": projects})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)})
+
+async def api_videos(request):
+    conv_id = request.query.get('conv_id')
+    client = PavoClient()
+    try:
+        videos = await client.get_conversation_videos(conv_id)
+        return web.json_response({"status": "success", "videos": videos})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)})
+
+async def api_upload(request):
+    reader = await request.multipart()
+    field = await reader.next()
+    if not field: return web.json_response({"status": "error", "message": "No file"})
     
+    image_bytes = await field.read()
+    client = PavoClient()
+    try:
+        url = await client.upload_image(image_bytes, "upload.jpg")
+        return web.json_response({"status": "success", "url": url})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)})
+
+async def api_generate(request):
+    try:
+        data = await request.json()
+        prompt = data.get("prompt")
+        duration = data.get("duration", 12)
+        ratio = data.get("ratio", "9:16")
+        image_url = data.get("image_url")
+        chat_id = data.get("chat_id")
+        
+        client = PavoClient()
+        conv_id, task_id = await client.start_video(prompt, duration, ratio, image_url)
+        
+        # Start background queue monitor
+        asyncio.create_task(monitor_and_notify(conv_id, task_id, prompt, chat_id))
+        
+        return web.json_response({"status": "success", "task_id": task_id})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)})
+
+async def monitor_and_notify(conv_id, task_id, prompt, chat_id):
+    client = PavoClient()
     wait_time = 0
     while wait_time < 1200:
         await asyncio.sleep(15)
@@ -233,250 +192,42 @@ async def background_worker(message: Message, prompt: str, duration: int, ratio:
         try:
             url = await client.check_status(conv_id, task_id)
             if url:
-                vid_id = str(random.randint(10000, 99999))
-                video_cache[vid_id] = {"prompt": prompt, "duration": duration, "ratio": ratio, "image_url": image_url, "conv_id": conv_id}
-                await message.answer_video(url, caption=f"✅ **Mass Gen Success!**\nPrompt: {prompt}\nDuration: {duration}s | Ratio: {ratio}", reply_markup=video_action_keyboard(vid_id), parse_mode="Markdown")
+                if chat_id:
+                    await bot.send_video(chat_id, url, caption=f"✅ Video Ready!\nPrompt: {prompt}")
                 return
-        except Exception as e:
-            if "queue is full" in str(e).lower() or "high volume" in str(e).lower(): continue
-            else: return
-
-async def single_generation(message: Message, prompt: str, duration: int, ratio: str, image_url: str, conv_id: str):
-    msg = await message.answer(f"⏳ Generating {duration}s video ({ratio})...")
-    try:
-        new_conv_id, task_id = await PavoClient().start_video(prompt, duration, ratio, image_url, conv_id)
-        await msg.edit_text(f"🎥 Task: `{task_id}`\n\n⚠️ Queue can be full. Waiting...", parse_mode="Markdown")
-        
-        wait_time = 0
-        while wait_time < 1200:
-            await asyncio.sleep(10)
-            wait_time += 10
-            try:
-                url = await PavoClient().check_status(new_conv_id, task_id)
-                if url:
-                    await msg.edit_text("✅ Done! Uploading...")
-                    vid_id = str(random.randint(10000, 99999))
-                    video_cache[vid_id] = {"prompt": prompt, "duration": duration, "ratio": ratio, "image_url": image_url, "conv_id": new_conv_id}
-                    await message.answer_video(url, caption=f"Prompt: {prompt}\nDuration: {duration}s | Ratio: {ratio}", reply_markup=video_action_keyboard(vid_id))
-                    return
-            except Exception as e:
-                if "queue is full" in str(e).lower() or "high volume" in str(e).lower():
-                    if wait_time % 60 == 0: await msg.edit_text(f"⏳ **Queue is Full**\n(Waiting {wait_time}s...)", parse_mode="HTML")
-                    continue
-                else:
-                    await msg.edit_text(f"❌ **Generation Failed:**\n\n{e}")
-                    return
-        await msg.edit_text("⏰ Timed out.")
-    except Exception as e: await msg.edit_text(f"❌ Error: {e}")
+        except Exception:
+            pass
 
 # ==========================================
-# HANDLERS
+# TELEGRAM BOT SETUP
 # ==========================================
 @dp.message(Command("start"))
-async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
-    get_settings(message.from_user.id)["conversation_id"] = None
-    await message.answer("Welcome to Pavo AI Bot! 🚀\nChoose an option:", reply_markup=main_menu())
-
-@dp.callback_query(F.data == "menu_main")
-async def back_to_main(cb: CallbackQuery, state: FSMContext): 
-    await state.clear()
-    await cb.message.edit_text("Main Menu:", reply_markup=main_menu())
-
-# --- 1. BROWSE PROJECTS ---
-@dp.callback_query(F.data == "menu_history")
-async def show_history(cb: CallbackQuery):
-    msg = await cb.message.edit_text("⏳ Fetching your projects...")
-    try:
-        projects = await PavoClient().get_projects()
-        if not projects: return await msg.edit_text("No projects found.", reply_markup=main_menu())
-        buttons = []
-        for p in projects:
-            if p.get("category") == "video" or p["data"].get("category") == "video":
-                title = p["data"].get("title", "Untitled")[:20]
-                buttons.append([InlineKeyboardButton(text=f"📁 {title}", callback_data=f"hist_{p['data'].get('conversation_id')}")])
-        buttons.append([InlineKeyboardButton(text="⬅️ Back", callback_data="menu_main")])
-        await msg.edit_text("📜 **Select a project:**", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
-    except Exception as e: await msg.edit_text(f"❌ Error: {e}", reply_markup=main_menu())
-
-@dp.callback_query(F.data.startswith("hist_"))
-async def load_history_videos(cb: CallbackQuery):
-    conv_id = cb.data.split("_")[1]
-    msg = await cb.message.edit_text("⏳ Fetching videos...")
-    try:
-        videos = await PavoClient().get_conversation_videos(conv_id)
-        if not videos: return await msg.edit_text("No successful videos.", reply_markup=main_menu())
-        await msg.edit_text(f"📦 Sending {len(videos)} video(s)...")
-        for v in videos:
-            vid_id = str(random.randint(10000, 99999))
-            video_cache[vid_id] = v
-            await cb.message.answer_video(v["url"], caption=f"Prompt: {v['prompt']}\nDuration: {v['duration']}s | Ratio: {v['ratio']}", reply_markup=video_action_keyboard(vid_id))
-            await asyncio.sleep(1.5)
-        
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Add Video to this Project", callback_data=f"addto_{conv_id}")],
-            [InlineKeyboardButton(text="⬅️ Back to Main Menu", callback_data="menu_main")]
-        ])
-        await cb.message.answer("What would you like to do next?", reply_markup=kb)
-    except Exception as e: await cb.message.edit_text(f"❌ Error: {e}", reply_markup=main_menu())
-
-@dp.callback_query(F.data.startswith("addto_"))
-async def add_to_conversation(cb: CallbackQuery):
-    conv_id = cb.data.split("_")[1]
-    get_settings(cb.from_user.id)["conversation_id"] = conv_id
-    await cb.message.edit_text("✅ Context saved! Any video you generate now will be added to this project.", reply_markup=settings_menu(cb.from_user.id))
-
-# --- 2. GLOBAL SEARCH ---
-@dp.callback_query(F.data == "menu_all_history")
-async def search_all_history(cb: CallbackQuery):
-    msg = await cb.message.edit_text("🌐 Scanning ALL projects for videos...")
-    try:
-        projects = await PavoClient().get_projects()
-        if not projects: return await msg.edit_text("No projects found.", reply_markup=main_menu())
-        total_videos = 0
-        for p in projects:
-            if p.get("category") == "video" or p["data"].get("category") == "video":
-                videos = await PavoClient().get_conversation_videos(p["data"].get("conversation_id"))
-                if videos:
-                    for v in videos:
-                        total_videos += 1
-                        vid_id = str(random.randint(10000, 99999))
-                        video_cache[vid_id] = v
-                        try:
-                            await cb.message.answer_video(v["url"], caption=f"Prompt: {v['prompt']}\nDuration: {v['duration']}s | Ratio: {v['ratio']}", reply_markup=video_action_keyboard(vid_id))
-                            await asyncio.sleep(2.5)
-                        except: pass
-        if total_videos == 0: await cb.message.answer("No videos found in your entire history.")
-        back_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⬅️ Back to Main Menu", callback_data="menu_main")]])
-        await cb.message.answer(f"✅ Scan complete! Found {total_videos} videos.", reply_markup=back_kb)
-    except Exception as e: await cb.message.answer(f"❌ Error: {e}", reply_markup=main_menu())
-
-# --- 3. MASS GENERATION ---
-@dp.callback_query(F.data == "menu_mass")
-async def mass_menu(cb: CallbackQuery): 
-    await cb.message.edit_text("🚀 **Mass Generation (Spam Mode)**", reply_markup=mass_settings_menu(cb.from_user.id), parse_mode="Markdown")
-
-@dp.callback_query(F.data == "set_mass_amt")
-async def ask_mass_amt(cb: CallbackQuery, state: FSMContext):
-    await cb.message.edit_text("✏️ Enter the number of simultaneous threads you want (e.g., 15, 50, 100):", reply_markup=cancel_kb())
-    await state.set_state(UserStates.waiting_for_mass_count)
-
-@dp.message(UserStates.waiting_for_mass_count)
-async def set_mass_amt_value(message: Message, state: FSMContext):
-    try:
-        val = int(message.text.strip())
-        if val < 1 or val > 200: raise ValueError
-        get_settings(message.from_user.id)["mass_amount"] = val
-        await message.answer(f"✅ Set to {val} threads!", reply_markup=mass_settings_menu(message.from_user.id))
-        await state.clear()
-    except ValueError:
-        await message.answer("❌ Please enter a valid number between 1 and 200.", reply_markup=cancel_kb())
-
-@dp.callback_query(F.data == "do_mass_generate")
-async def ask_mass_prompt(cb: CallbackQuery, state: FSMContext):
-    s = get_settings(cb.from_user.id)
-    await cb.message.edit_text(f"📝 Enter your prompt. It will be sent **{s['mass_amount']} times** simultaneously:", reply_markup=cancel_kb(), parse_mode="Markdown")
-    await state.set_state(UserStates.waiting_for_mass_prompt)
-
-@dp.message(UserStates.waiting_for_mass_prompt)
-async def process_mass_prompt(message: Message, state: FSMContext):
-    s = get_settings(message.from_user.id)
-    await message.answer(f"💣 **Firing {s['mass_amount']} generation threads simultaneously!**\n\nPlease wait.")
-    for _ in range(s["mass_amount"]):
-        asyncio.create_task(background_worker(message, message.text, s["duration"], s["ratio"], s["image_url"]))
-        await asyncio.sleep(0.5)
-    await state.clear()
-
-# --- 4. NORMAL FLOW ---
-@dp.callback_query(F.data == "menu_gen")
-async def generate_menu(cb: CallbackQuery): 
-    get_settings(cb.from_user.id)["conversation_id"] = None
-    await cb.message.edit_text("🎛 **Video Settings**", reply_markup=settings_menu(cb.from_user.id), parse_mode="Markdown")
-
-@dp.callback_query(F.data == "cycle_dur")
-async def cycle_duration(cb: CallbackQuery):
-    s = get_settings(cb.from_user.id)
-    durations = [4, 5, 6, 8, 10, 12]
-    s["duration"] = durations[(durations.index(int(s["duration"])) + 1) % len(durations)]
-    await cb.message.edit_text(f"🎛 **Video Settings**\nDuration: **{s['duration']}s**", reply_markup=settings_menu(cb.from_user.id), parse_mode="Markdown")
-
-@dp.callback_query(F.data == "cycle_rat")
-async def cycle_ratio(cb: CallbackQuery):
-    s = get_settings(cb.from_user.id)
-    ratios = ["9:16", "16:9", "1:1", "3:4"]
-    s["ratio"] = ratios[(ratios.index(s["ratio"]) + 1) % len(ratios)]
-    await cb.message.edit_text(f"🎛 **Video Settings**\nRatio: **{s['ratio']}**", reply_markup=settings_menu(cb.from_user.id), parse_mode="Markdown")
-
-@dp.callback_query(F.data == "set_image")
-async def ask_image(cb: CallbackQuery, state: FSMContext):
-    await cb.message.edit_text("📸 Send a photo (or /skip):", reply_markup=cancel_kb())
-    await state.set_state(UserStates.waiting_for_image)
-
-@dp.message(UserStates.waiting_for_image, F.photo)
-async def handle_image(message: Message, state: FSMContext):
-    msg = await message.answer("⏳ Uploading image...")
-    file = await bot.get_file(message.photo[-1].file_id)
-    file_bytes = await bot.download_file(file.file_path)
-    try:
-        url = await PavoClient().upload_image(file_bytes.read(), "upload.jpg")
-        get_settings(message.from_user.id)["image_url"] = url
-        await msg.edit_text("✅ Image added!", reply_markup=settings_menu(message.from_user.id))
-    except Exception as e: await msg.edit_text(f"❌ Upload failed: {e}", reply_markup=settings_menu(message.from_user.id))
-    finally: await state.clear()
-
-@dp.message(UserStates.waiting_for_image, Command("skip"))
-async def skip_image(message: Message, state: FSMContext):
-    get_settings(message.from_user.id)["image_url"] = None
-    await message.answer("Image removed.", reply_markup=settings_menu(message.from_user.id))
-    await state.clear()
-
-@dp.callback_query(F.data == "do_generate")
-async def ask_prompt(cb: CallbackQuery, state: FSMContext):
-    s = get_settings(cb.from_user.id)
-    await cb.message.edit_text(f"📝 Enter prompt ({s['duration']}s | {s['ratio']}):", reply_markup=cancel_kb())
-    await state.set_state(UserStates.waiting_for_prompt)
-
-@dp.message(UserStates.waiting_for_prompt)
-async def process_prompt(message: Message, state: FSMContext):
-    s = get_settings(message.from_user.id)
-    await single_generation(message, message.text, s["duration"], s["ratio"], s["image_url"], s["conversation_id"])
-    await state.clear()
-
-# --- 5. EDIT & REGENERATE ---
-@dp.callback_query(F.data.startswith("regen_"))
-async def regenerate_video(cb: CallbackQuery):
-    v = video_cache.get(cb.data.split("_")[1])
-    if not v: return await cb.answer("Expired.", show_alert=True)
-    await cb.message.edit_reply_markup(reply_markup=None)
-    await single_generation(cb.message, v["prompt"], v["duration"], v["ratio"], v["image_url"], v["conv_id"])
-
-@dp.callback_query(F.data.startswith("edit_"))
-async def edit_video(cb: CallbackQuery, state: FSMContext):
-    v = video_cache.get(cb.data.split("_")[1])
-    if not v: return await cb.answer("Expired.", show_alert=True)
-    await state.update_data(edit_data=v)
-    await cb.message.reply(f"✏️ **Editing Prompt**\n\nOriginal: `{v['prompt']}`\n\nNew prompt:", reply_markup=cancel_kb(), parse_mode="Markdown")
-    await state.set_state(UserStates.waiting_for_edit_prompt)
-
-@dp.message(UserStates.waiting_for_edit_prompt)
-async def process_edit_prompt(message: Message, state: FSMContext):
-    v = (await state.get_data()).get("edit_data")
-    if not v: return await message.answer("Error: Data lost.")
-    await single_generation(message, message.text, v["duration"], v["ratio"], v["image_url"], v["conv_id"])
-    await state.clear()
+async def cmd_start(message: Message):
+    url = "https://sam-8-7lpn.onrender.com"
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🎬 Open Pavo AI App", web_app=web.WebAppInfo(url=url))]])
+    await message.answer("Welcome! Click below to open the full Pavo AI interface directly in Telegram:", reply_markup=kb)
 
 # ==========================================
-# MAIN EXECUTION
+# MAIN
 # ==========================================
 async def main():
-    await web_server()
+    app = web.Application()
+    app.router.add_get('/', index_handler)
+    app.router.add_get('/api/history', api_history)
+    app.router.add_get('/api/videos', api_videos)
+    app.router.add_post('/api/upload', api_upload)
+    app.router.add_post('/api/generate', api_generate)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    log.info(f"Web UI running on port {port}")
+    
     await bot.delete_webhook(drop_pending_updates=True)
     log.info("Bot polling started...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main())    
-
-    
-
-        
+    asyncio.run(main())

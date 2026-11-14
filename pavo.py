@@ -1,42 +1,70 @@
 import os
 import json
 import time
-import requests
 import threading
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+
+# Use curl_cffi (Chrome TLS fingerprint) if installed, otherwise fallback to requests
+try:
+    from curl_cffi import requests as http_client
+    USE_CURL_CFFI = True
+except ImportError:
+    import requests as http_client
+    USE_CURL_CFFI = False
 
 app = Flask(__name__)
 CORS(app)
 
 API_BASE = "https://api.pixa-ai.work"
+PROXY_URL = os.environ.get("PROXY_URL", "").strip()
+PROXIES = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
+
+def req(method, url, **kwargs):
+    if USE_CURL_CFFI:
+        kwargs.setdefault("impersonate", "chrome")
+    if PROXIES:
+        kwargs.setdefault("proxies", PROXIES)
+    return getattr(http_client, method)(url, **kwargs)
 
 def get_headers(token):
     return {
         "x-platform": "1",
         "x-user-language": "en",
         "x-app-timezone": "Asia/Calcutta",
+        "x-client-time-ms": str(int(time.time() * 1000)),
         "origin": "https://app.pavo-ai.work",
         "referer": "https://app.pavo-ai.work/",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "sec-fetch-site": "cross-site",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-dest": "empty",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         "content-type": "application/json",
         "accept": "*/*",
         "authorization": f"Bearer {token}"
     }
 
 def safe_json(r):
+    if r.status_code == 567 or "Tencent Cloud EdgeOne" in r.text or "<!doctype html>" in r.text.lower():
+        return {
+            "_blocked": True,
+            "_status": r.status_code,
+            "message": f"Blocked by Tencent EdgeOne WAF (HTTP {r.status_code}). Server IP was flagged/rate-limited. Wait 1-2 mins, or run pavo.py locally / set PROXY_URL."
+        }
     try:
         return r.json()
     except Exception:
-        return {"_raw": r.text, "_status": r.status_code}
+        return {"_raw": r.text[:300], "_status": r.status_code}
 
 video_cache = {}
 conversation_images = {}
 
 def check_task_in_history(conv_id, task_id, token):
     url = f"{API_BASE}/api/v1/chat/conversation/history?conversation_id={conv_id}"
-    r = requests.get(url, headers=get_headers(token), timeout=20)
+    r = req("get", url, headers=get_headers(token), timeout=20)
     data = safe_json(r)
+    if data.get("_blocked"):
+        return None
 
     turns = (data.get("data") or {}).get("turns") or []
     if not turns:
@@ -69,8 +97,8 @@ def check_task_in_history(conv_id, task_id, token):
 def monitor_generation(conv_id, task_id, token):
     wait_time = 0
     while wait_time < 1200:
-        time.sleep(10)
-        wait_time += 10
+        time.sleep(20)  # 20s interval to avoid EdgeOne rate-limit
+        wait_time += 20
         try:
             res = check_task_in_history(conv_id, task_id, token)
             if res:
@@ -85,7 +113,7 @@ def monitor_generation(conv_id, task_id, token):
 
 @app.route('/')
 def home():
-    return "Pavo Backend is Active!"
+    return f"Pavo Backend Active! (TLS Impersonation: {'Chrome/curl_cffi' if USE_CURL_CFFI else 'standard requests'})"
 
 @app.route('/api/generate', methods=['POST'])
 def generate():
@@ -102,7 +130,6 @@ def generate():
         existing_conv_id = d.get("conv_id")
         is_spam = bool(d.get("is_spam", False))
 
-        # Always create a new conversation if spam mode or no existing_conv_id
         if existing_conv_id and not is_spam:
             conv_id = existing_conv_id
             if not image_url and conv_id in conversation_images:
@@ -110,13 +137,16 @@ def generate():
         else:
             conv_url = f"{API_BASE}/api/v1/chat/conversation"
             title_json = json.dumps([{"type": "text", "content": prompt[:60]}])
-            r_conv = requests.post(
+            r_conv = req(
+                "post",
                 conv_url,
                 json={"title": title_json, "folder_id": "", "kb_strict": False},
                 headers=get_headers(token),
                 timeout=20
             )
             conv_data = safe_json(r_conv)
+            if conv_data.get("_blocked"):
+                return jsonify({"status": "error", "message": conv_data["message"]})
             conv_id = (conv_data.get("data") or {}).get("conversation_id")
             if not conv_id:
                 return jsonify({"status": "error", "message": f"Invalid Token or API Error: {conv_data}"})
@@ -149,20 +179,23 @@ def generate():
         task_id = None
         stream_text = "I am starting to prepare your creation..."
 
-        with requests.post(
+        with req(
+            "post",
             stream_url,
             json=payload,
             headers={**get_headers(token), "accept": "text/event-stream"},
             stream=True,
             timeout=60
         ) as r:
+            if r.status_code == 567 or "EdgeOne" in r.text[:300]:
+                return jsonify({"status": "error", "message": f"Blocked by Tencent EdgeOne (HTTP {r.status_code})."})
             if r.status_code != 200:
                 return jsonify({"status": "error", "message": f"Stream HTTP {r.status_code}: {r.text[:200]}"})
 
             for line in r.iter_lines():
                 if not line:
                     continue
-                line_str = line.decode('utf-8', errors='ignore')
+                line_str = line.decode('utf-8', errors='ignore') if isinstance(line, bytes) else line
                 if line_str.startswith("data:"):
                     try:
                         evt = json.loads(line_str[5:].strip())
@@ -230,19 +263,24 @@ def upload():
         fname = file.filename or "upload.jpg"
 
         pre_url = f"{API_BASE}/api/v1/file/presigned-url"
-        r_pre = requests.post(
+        r_pre = req(
+            "post",
             pre_url,
             json={"purpose": "chat_attachment", "content_type": ctype, "filename": fname},
             headers=get_headers(token),
             timeout=20
         )
         pre_data = safe_json(r_pre)
+        if pre_data.get("_blocked"):
+            return jsonify({"status": "error", "message": pre_data["message"]})
+
         pdata = pre_data.get("data") or {}
         if not pdata.get("upload_url"):
             return jsonify({"status": "error", "message": f"Presign failed: {pre_data}"})
 
-        requests.put(pdata["upload_url"], data=file.read(), headers={"Content-Type": ctype}, timeout=30)
-        requests.post(
+        req("put", pdata["upload_url"], data=file.read(), headers={"Content-Type": ctype}, timeout=30)
+        req(
+            "post",
             f"{API_BASE}/api/v1/file/inspect",
             json={"content_type": ctype, "url": pdata["public_url"]},
             headers=get_headers(token),
@@ -259,8 +297,10 @@ def get_projects():
         if not token:
             return jsonify({"status": "error", "message": "Token missing in headers"})
 
-        r = requests.get(f"{API_BASE}/api/v1/chat/projects?page_size=50&page=1", headers=get_headers(token), timeout=20)
+        r = req("get", f"{API_BASE}/api/v1/chat/projects?page_size=50&page=1", headers=get_headers(token), timeout=20)
         data = safe_json(r)
+        if data.get("_blocked"):
+            return jsonify({"status": "error", "message": data["message"]})
         if data.get("code") != "000000":
             return jsonify({"status": "error", "message": data.get("message") or "API Error"})
 
@@ -275,12 +315,15 @@ def get_videos(conv_id):
         if not token:
             return jsonify({"status": "error", "message": "Token missing in headers"})
 
-        r = requests.get(
+        r = req(
+            "get",
             f"{API_BASE}/api/v1/chat/conversation/history?conversation_id={conv_id}",
             headers=get_headers(token),
             timeout=20
         )
         data = safe_json(r)
+        if data.get("_blocked"):
+            return jsonify({"status": "error", "message": data["message"]})
         if data.get("code") != "000000":
             return jsonify({"status": "error", "message": data.get("message") or data.get("_raw") or "Failed to load history"})
 
@@ -362,8 +405,10 @@ def delete_project():
         conv_id = d.get("conv_id")
 
         url = f"{API_BASE}/api/v1/chat/projects?id={conv_id}&type=ai_creation"
-        r = requests.delete(url, headers=get_headers(token), timeout=20)
+        r = req("delete", url, headers=get_headers(token), timeout=20)
         data = safe_json(r)
+        if data.get("_blocked"):
+            return jsonify({"status": "error", "message": data["message"]})
 
         if data.get("code") == "000000":
             return jsonify({"status": "success"})

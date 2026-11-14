@@ -6,7 +6,7 @@ from telegram.error import BadRequest
 from telegram.ext import Application, CallbackQueryHandler as CQH, CommandHandler as CH, MessageHandler as MH, filters
 
 BASE = "https://api.pixa-ai.work"
-BOT_TOKEN = os.getenv("BOT_TOKEN") or input("Bot Token: ").strip()
+BOT_TOKEN = os.getenv("8817040407:AAHxM7D7l5Cc7yuIZvpaeS7guyIzQic9fQI") or input("Bot Token: ").strip()
 ALLOW_ID = int(os.getenv("CHAT_ID") or "1827265590")
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/116.0.0.0"
 

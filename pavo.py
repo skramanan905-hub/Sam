@@ -100,7 +100,6 @@ class PavoClient:
                 if user_msg.get("type") == "Message" and "content" in user_msg.get("data", {}):
                     prompt_text = user_msg["data"]["content"]
                     break
-                # Fallback: Check if it's inside the creative_prompt_json
                 elif user_msg.get("type") == "creative_prompt":
                     try:
                         cp_json = json.loads(user_msg["data"].get("creative_prompt_json", "[]"))
@@ -230,7 +229,7 @@ async def background_worker(message: Message, prompt: str, duration: int, ratio:
     try:
         conv_id, task_id = await client.start_video(prompt, duration, ratio, image_url)
     except Exception:
-        return # If queue is full instantly, abandon this thread silently
+        return 
     
     wait_time = 0
     while wait_time < 1200:
@@ -292,10 +291,10 @@ async def back_to_main(cb: CallbackQuery, state: FSMContext):
     await state.clear()
     await cb.message.edit_text("Main Menu:", reply_markup=main_menu())
 
-# --- GLOBAL HISTORY SEARCH ---
+# --- GLOBAL HISTORY SEARCH (FIXED: Delay added to prevent Telegram block) ---
 @dp.callback_query(F.data == "menu_all_history")
 async def search_all_history(cb: CallbackQuery):
-    msg = await cb.message.edit_text("🔍 Scanning all your projects for videos... (This might take a minute)")
+    msg = await cb.message.edit_text("🔍 Scanning all your projects for videos... (This will take time and videos will be sent one by one)")
     client = PavoClient()
     try:
         projects = await client.get_projects()
@@ -313,7 +312,12 @@ async def search_all_history(cb: CallbackQuery):
                         total_videos += 1
                         vid_id = str(random.randint(10000, 99999))
                         video_cache[vid_id] = v
-                        await cb.message.answer_video(v["url"], caption=f"Prompt: {v['prompt']}\nDuration: {v['duration']}s | Ratio: {v['ratio']}", reply_markup=video_action_keyboard(vid_id))
+                        try:
+                            await cb.message.answer_video(v["url"], caption=f"Prompt: {v['prompt']}\nDuration: {v['duration']}s | Ratio: {v['ratio']}", reply_markup=video_action_keyboard(vid_id))
+                            await asyncio.sleep(2.5) # 🔥 FIX: 2.5 sec delay between videos to prevent Telegram flood limit
+                        except Exception as e:
+                            log.warning(f"Skipped a video due to Telegram error: {e}")
+                            continue
         
         if total_videos == 0:
             await cb.message.answer("No videos found in your entire history.")
@@ -460,6 +464,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
-

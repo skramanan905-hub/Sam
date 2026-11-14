@@ -11,7 +11,8 @@ CORS(app)
 
 # ================= CONFIGURATION =================
 API_BASE = "https://api.pixa-ai.work"
-PIXA_JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxYTA2YTE2NC0zY2FjLTQzY2QtODM5YS01ZTM4ZTE2NTViZmIiLCJleHAiOjE3OTcwNDU5MDcsIm5iZiI6MTc5NDYyNjcwNywiaWF0IjoxNzk0NjI2NzA3fQ.rExyu1j6MLIMVV8Tl2RW5QBBtBTuqcgLgxAiaHof5Wo"
+# Updated with the NEW token from pavo2.txt
+PIXA_JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmMTcwYjczYy1jNTk2LTQ5MDctYjFhOC0zYzgyMTRhYTQ3OGYiLCJleHAiOjE3OTcwNjA1NDEsIm5iZiI6MTc5NDY0MTM0MSwiaWF0IjoxNzk0NjQxMzQxfQ.D-nkf3_jTyztGuP5XcKDNEecoBsUdPLYJMqtRk83KtU"
 
 def get_headers():
     return {
@@ -26,6 +27,7 @@ def safe_json(r):
     try: return r.json()
     except: return {"_raw": r.text, "_status": r.status_code}
 
+# Caches
 video_cache = {}
 conversation_images = {} 
 
@@ -58,6 +60,8 @@ def monitor_generation(conv_id, task_id):
     if task_id in video_cache and video_cache[task_id]["status"] == "queued":
         video_cache[task_id]["status"] = "timeout"
 
+# ================= ROUTES =================
+
 @app.route('/')
 def home():
     return "Pavo Backend is Active!"
@@ -78,7 +82,9 @@ def generate():
                 image_url = conversation_images[conv_id]
         else:
             conv_url = f"{API_BASE}/api/v1/chat/conversation"
-            r_conv = requests.post(conv_url, json={"title": prompt[:60], "folder_id": "", "kb_strict": False}, headers=get_headers(), timeout=20)
+            # New format observed in pavo2.txt: {"title":"[{\"type\":\"text\",\"content\":\"...\"}]"}
+            title_json = json.dumps([{"type": "text", "content": prompt[:60]}])
+            r_conv = requests.post(conv_url, json={"title": title_json, "folder_id": "", "kb_strict": False}, headers=get_headers(), timeout=20)
             conv_data = safe_json(r_conv)
             try:
                 conv_id = conv_data["data"]["conversation_id"]
@@ -100,7 +106,6 @@ def generate():
             payload["images"].append({"url": image_url, "meta_data": {"original_filename": "input.jpg", "content_type": "image/jpeg", "purpose": "chat_attachment"}})
 
         task_id = None
-        # 🔥 CAPTURE THE ASSISTANT TEXT FROM THE STREAM
         stream_text = "I am starting to prepare your creation..."
         
         with requests.post(stream_url, json=payload, headers={**get_headers(), "accept": "text/event-stream"}, stream=True, timeout=30) as r:
@@ -110,7 +115,6 @@ def generate():
                     if line_str.startswith("data:"):
                         try:
                             evt = json.loads(line_str[5:].strip())
-                            # Capture text messages
                             if evt.get("type") == "MessageDelta" and "content" in evt.get("data", {}):
                                 stream_text = evt["data"]["content"]
                             elif evt.get("type") == "GenerationStart":
@@ -138,8 +142,7 @@ def check_status(task_id):
 @app.route('/api/upload', methods=['POST'])
 def upload():
     try:
-        if 'image' not in request.files:
-            return jsonify({"status": "error", "message": "No file"})
+        if 'image' not in request.files: return jsonify({"status": "error", "message": "No file"})
         file = request.files['image']
         pre_url = f"{API_BASE}/api/v1/file/presigned-url"
         r_pre = requests.post(pre_url, json={"purpose": "chat_attachment", "content_type": "image/jpeg", "filename": "upload.jpg"}, headers=get_headers(), timeout=20)
@@ -170,16 +173,12 @@ def get_videos(conv_id):
         for turn in data.get("data", {}).get("turns", []):
             prompt = "Unknown"
             for u_msg in turn.get("user", []):
-                if u_msg.get("type") == "Message":
-                    prompt = u_msg["data"].get("content", prompt)
-                elif u_msg.get("type") == "File" and not saved_img:
-                    saved_img = u_msg["data"].get("url")
+                if u_msg.get("type") == "Message": prompt = u_msg["data"].get("content", prompt)
+                elif u_msg.get("type") == "File" and not saved_img: saved_img = u_msg["data"].get("url")
             
-            # Extract failed text if it exists in history
             asst_text = ""
             for a_msg in turn.get("assistant", []):
-                if a_msg["type"] == "Message":
-                    asst_text = a_msg["data"].get("content", "")
+                if a_msg["type"] == "Message": asst_text = a_msg["data"].get("content", "")
                 elif a_msg["type"] == "GenerationSuccess":
                     res = a_msg["data"]["data"]["results"]
                     if res and res[0].get("url"):
@@ -189,6 +188,24 @@ def get_videos(conv_id):
                     videos.append({"url": None, "prompt": prompt, "image_url": saved_img, "text": asst_text, "error": err})
                         
         return jsonify({"status": "success", "videos": videos})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+# 🔥 NEW ROUTE: Delete Project
+@app.route('/api/delete_project', methods=['POST'])
+def delete_project():
+    try:
+        d = request.json
+        conv_id = d.get("conv_id")
+        
+        url = f"{API_BASE}/api/v1/chat/projects?id={conv_id}&type=ai_creation"
+        r = requests.delete(url, headers=get_headers(), timeout=20)
+        data = safe_json(r)
+        
+        if data.get("code") == "000000":
+            return jsonify({"status": "success"})
+        else:
+            return jsonify({"status": "error", "message": data.get("message", "Unknown error")})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 

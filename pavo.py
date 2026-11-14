@@ -15,8 +15,6 @@ from aiogram.fsm.state import State, StatesGroup
 # ==========================================
 BOT_TOKEN = "8817040407:AAHxM7D7l5Cc7yuIZvpaeS7guyIzQic9fQI"
 API_BASE = "https://api.pixa-ai.work"
-
-# The EXACT token from pavo1.txt
 PIXA_JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxYTA2YTE2NC0zY2FjLTQzY2QtODM5YS01ZTM4ZTE2NTViZmIiLCJleHAiOjE3OTcwNDU5MDcsIm5iZiI6MTc5NDYyNjcwNywiaWF0IjoxNzk0NjI2NzA3fQ.rExyu1j6MLIMVV8Tl2RW5QBBtBTuqcgLgxAiaHof5Wo"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -36,15 +34,19 @@ user_settings = {}
 
 def get_settings(uid):
     if uid not in user_settings:
-        user_settings[uid] = {"duration": 12, "ratio": "9:16", "image_url": None}
+        user_settings[uid] = {
+            "duration": 12, 
+            "ratio": "9:16", 
+            "image_url": None,
+            "conversation_id": None
+        }
     return user_settings[uid]
 
 # ==========================================
-# FAKE WEB SERVER (For Render)
+# FAKE WEB SERVER (Render)
 # ==========================================
 async def web_server():
-    async def handle(request):
-        return web.Response(text="Pavo Bot is alive!")
+    async def handle(request): return web.Response(text="Pavo Bot is alive!")
     app = web.Application()
     app.router.add_get('/', handle)
     runner = web.AppRunner(app)
@@ -55,7 +57,7 @@ async def web_server():
     log.info(f"Web server running on port {port}")
 
 # ==========================================
-# PAVO API CLIENT (Strictly mapped to HAR)
+# PAVO API CLIENT
 # ==========================================
 class PavoClient:
     def __init__(self):
@@ -69,18 +71,14 @@ class PavoClient:
 
     async def request(self, method, endpoint, json_data=None):
         url = f"{API_BASE}{endpoint}"
-        log.info(f"🌐 [API REQ] {method} {url}")
-        
         async with aiohttp.ClientSession() as session:
             async with session.request(method, url, headers=self.headers, json=json_data, timeout=60) as resp:
                 text = await resp.text()
                 try:
                     data = json.loads(text)
-                    if data.get("code") not in ("000000", None):
-                        raise Exception(data.get("message", "API Error"))
+                    if data.get("code") not in ("000000", None): raise Exception(data.get("message", "API Error"))
                     return data.get("data", data)
-                except json.JSONDecodeError:
-                    raise Exception(f"Invalid JSON: {text}")
+                except json.JSONDecodeError: raise Exception(f"Invalid JSON: {text}")
 
     async def get_projects(self):
         data = await self.request("GET", "/api/v1/chat/projects?page_size=10&page=1")
@@ -99,23 +97,19 @@ class PavoClient:
         return videos
 
     async def upload_image(self, image_bytes, filename):
-        # 1. Presigned URL
-        pre_data = await self.request("POST", "/api/v1/file/presigned-url", {
-            "purpose": "chat_attachment", "content_type": "image/jpeg", "filename": filename
-        })
-        # 2. PUT to AWS
+        pre_data = await self.request("POST", "/api/v1/file/presigned-url", {"purpose": "chat_attachment", "content_type": "image/jpeg", "filename": filename})
         async with aiohttp.ClientSession() as session:
             async with session.put(pre_data["upload_url"], data=image_bytes, headers={"Content-Type": "image/jpeg"}) as resp:
                 if resp.status not in (200, 201, 204): raise Exception("Failed to upload image.")
-        # 3. Inspect
-        await self.request("POST", "/api/v1/file/inspect", {
-            "content_type": "image/jpeg", "url": pre_data["public_url"]
-        })
+        await self.request("POST", "/api/v1/file/inspect", {"content_type": "image/jpeg", "url": pre_data["public_url"]})
         return pre_data["public_url"]
 
-    async def start_video(self, prompt, duration, ratio, image_url=None):
-        conv = await self.request("POST", "/api/v1/chat/conversation", {"title": prompt[:60], "folder_id": "", "kb_strict": False})
-        conv_id = conv["conversation_id"]
+    async def start_video(self, prompt, duration, ratio, image_url=None, existing_conv_id=None):
+        if existing_conv_id:
+            conv_id = existing_conv_id
+        else:
+            conv = await self.request("POST", "/api/v1/chat/conversation", {"title": prompt[:60], "folder_id": "", "kb_strict": False})
+            conv_id = conv["conversation_id"]
         
         payload = {
             "conversation_id": conv_id, "prompt": prompt, "mode": "omni_to_video",
@@ -127,7 +121,6 @@ class PavoClient:
         if image_url:
             payload["images"].append({"url": image_url, "meta_data": {"original_filename": "input.jpg", "content_type": "image/jpeg", "purpose": "chat_attachment"}})
         
-        # SSE Stream
         async with aiohttp.ClientSession() as session:
             async with session.post(f"{API_BASE}/api/v1/chat/stream", headers={**self.headers, "accept": "text/event-stream"}, json=payload) as resp:
                 async for line in resp.content:
@@ -136,17 +129,25 @@ class PavoClient:
                         try:
                             evt = json.loads(line_str[5:].strip())
                             if evt.get("type") == "GenerationStart": return conv_id, evt.get("task_id")
-                            elif evt.get("type") in ["GenerationFailed", "PromptSafetyBlocked"]: raise Exception(evt.get("data", {}).get("error", "Failed"))
+                            elif evt.get("type") in ["GenerationFailed", "PromptSafetyBlocked"]: raise Exception(evt.get("data", {}).get("error_message", "Failed"))
                         except json.JSONDecodeError: pass
         raise Exception("Stream ended unexpectedly.")
 
-    async def check_status(self, conv_id):
+    async def check_status(self, conv_id, current_task_id):
         data = await self.request("GET", f"/api/v1/chat/conversation/history?conversation_id={conv_id}")
         turns = data.get("turns", [])
         if not turns: return None
-        for msg in turns[-1].get("assistant", []):
-            if msg["type"] == "GenerationSuccess": return msg["data"]["data"]["results"][0]["url"]
-            elif msg["type"] == "GenerationFailed": raise Exception(msg["data"].get("error", "Failed"))
+        
+        last_turn = turns[-1]
+        for msg in last_turn.get("assistant", []):
+            if msg["type"] == "GenerationSuccess":
+                if msg["data"].get("task_id") == current_task_id:
+                    return msg["data"]["data"]["results"][0]["url"]
+            elif msg["type"] == "GenerationFailed":
+                if msg["data"].get("task_id") == current_task_id:
+                    # Raise the exact error shown in your screenshot
+                    err = msg["data"].get("error_message", "Generation Failed")
+                    raise Exception(err)
         return None
 
 # ==========================================
@@ -154,14 +155,13 @@ class PavoClient:
 # ==========================================
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🎬 Generate Video", callback_data="menu_gen")],
-        [InlineKeyboardButton(text="📜 View History", callback_data="menu_history")],
-        [InlineKeyboardButton(text="🔑 View Token", callback_data="menu_token")]
+        [InlineKeyboardButton(text="🎬 Generate New Video", callback_data="menu_gen")],
+        [InlineKeyboardButton(text="📜 View History", callback_data="menu_history")]
     ])
 
 def settings_menu(uid):
     s = get_settings(uid)
-    img_status = "✅ Image Added" if s["image_url"] else "❌ No Image (Text)"
+    img_status = "✅ Image Added" if s["image_url"] else "❌ No Image"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"📸 {img_status}", callback_data="set_image")],
         [InlineKeyboardButton(text=f"⏱ Duration: {s['duration']}s", callback_data="cycle_dur"), InlineKeyboardButton(text=f"📺 Ratio: {s['ratio']}", callback_data="cycle_rat")],
@@ -175,13 +175,12 @@ def settings_menu(uid):
 @dp.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("Welcome to Pavo AI Bot! 🚀\nEverything is mapped to your HAR data.", reply_markup=main_menu())
+    get_settings(message.from_user.id)["conversation_id"] = None
+    await message.answer("Welcome to Pavo AI Bot! 🚀\nChoose an option:", reply_markup=main_menu())
 
 @dp.callback_query(F.data == "menu_main")
-async def back_to_main(cb: CallbackQuery): await cb.message.edit_text("Main Menu:", reply_markup=main_menu())
-
-@dp.callback_query(F.data == "menu_token")
-async def show_token(cb: CallbackQuery): await cb.message.edit_text(f"🔑 **Active JWT:**\n`{PIXA_JWT_TOKEN}`", parse_mode="Markdown", reply_markup=main_menu())
+async def back_to_main(cb: CallbackQuery): 
+    await cb.message.edit_text("Main Menu:", reply_markup=main_menu())
 
 # --- HISTORY MENU ---
 @dp.callback_query(F.data == "menu_history")
@@ -198,33 +197,46 @@ async def show_history(cb: CallbackQuery):
             if p.get("category") == "video" or p["data"].get("category") == "video":
                 title = p["data"].get("title", "Untitled")[:20]
                 conv_id = p["data"].get("conversation_id")
-                buttons.append([InlineKeyboardButton(text=f"🎬 {title}", callback_data=f"hist_{conv_id}")])
+                buttons.append([InlineKeyboardButton(text=f"📁 {title}", callback_data=f"hist_{conv_id}")])
         
         buttons.append([InlineKeyboardButton(text="⬅️ Back", callback_data="menu_main")])
-        await msg.edit_text("📜 **Select a project:**", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
+        await msg.edit_text("📜 **Select a project to view its videos:**", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
     except Exception as e:
         await msg.edit_text(f"❌ Error: {e}", reply_markup=main_menu())
 
 @dp.callback_query(F.data.startswith("hist_"))
 async def load_history_videos(cb: CallbackQuery):
     conv_id = cb.data.split("_")[1]
-    msg = await cb.message.edit_text("⏳ Fetching videos from history...")
+    msg = await cb.message.edit_text("⏳ Fetching videos...")
     client = PavoClient()
     try:
         videos = await client.get_conversation_videos(conv_id)
         if not videos:
-            return await msg.edit_text("No successful videos found.", reply_markup=main_menu())
+            return await msg.edit_text("No successful videos in this project.", reply_markup=main_menu())
         
         await msg.edit_text(f"📦 Found {len(videos)} video(s). Sending...")
         for v in videos:
             await cb.message.answer_video(v["url"], caption=f"Prompt: {v['prompt']}")
-        await cb.message.answer("End of history.", reply_markup=main_menu())
+        
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Add Video to this Project", callback_data=f"addto_{conv_id}")],
+            [InlineKeyboardButton(text="⬅️ Back to Menu", callback_data="menu_main")]
+        ])
+        await cb.message.answer("What would you like to do next?", reply_markup=kb)
     except Exception as e:
-        await msg.edit_text(f"❌ Error loading history: {e}", reply_markup=main_menu())
+        await cb.message.edit_text(f"❌ Error: {e}", reply_markup=main_menu())
+
+@dp.callback_query(F.data.startswith("addto_"))
+async def add_to_conversation(cb: CallbackQuery):
+    conv_id = cb.data.split("_")[1]
+    get_settings(cb.from_user.id)["conversation_id"] = conv_id
+    await cb.message.edit_text("✅ Context saved! Any video you generate now will be added to this project.", reply_markup=settings_menu(cb.from_user.id))
 
 # --- SETTINGS MENU ---
 @dp.callback_query(F.data == "menu_gen")
-async def generate_menu(cb: CallbackQuery): await cb.message.edit_text("🎛 **Video Settings**", reply_markup=settings_menu(cb.from_user.id), parse_mode="Markdown")
+async def generate_menu(cb: CallbackQuery): 
+    get_settings(cb.from_user.id)["conversation_id"] = None
+    await cb.message.edit_text("🎛 **Video Settings**", reply_markup=settings_menu(cb.from_user.id), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "cycle_dur")
 async def cycle_duration(cb: CallbackQuery):
@@ -232,7 +244,7 @@ async def cycle_duration(cb: CallbackQuery):
     durations = [4, 5, 6, 8, 10, 12]
     curr_idx = durations.index(int(s["duration"]))
     s["duration"] = durations[(curr_idx + 1) % len(durations)]
-    await cb.message.edit_text("🎛 **Video Settings**", reply_markup=settings_menu(cb.from_user.id), parse_mode="Markdown")
+    await cb.message.edit_text(f"🎛 **Video Settings**\nDuration changed to **{s['duration']}s**", reply_markup=settings_menu(cb.from_user.id), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "cycle_rat")
 async def cycle_ratio(cb: CallbackQuery):
@@ -240,7 +252,7 @@ async def cycle_ratio(cb: CallbackQuery):
     ratios = ["9:16", "16:9", "1:1", "3:4"]
     curr_idx = ratios.index(s["ratio"])
     s["ratio"] = ratios[(curr_idx + 1) % len(ratios)]
-    await cb.message.edit_text("🎛 **Video Settings**", reply_markup=settings_menu(cb.from_user.id), parse_mode="Markdown")
+    await cb.message.edit_text(f"🎛 **Video Settings**\nRatio changed to **{s['ratio']}**", reply_markup=settings_menu(cb.from_user.id), parse_mode="Markdown")
 
 @dp.callback_query(F.data == "set_image")
 async def ask_image(cb: CallbackQuery, state: FSMContext):
@@ -268,29 +280,49 @@ async def skip_image(message: Message, state: FSMContext):
 # --- GENERATION ---
 @dp.callback_query(F.data == "do_generate")
 async def ask_prompt(cb: CallbackQuery, state: FSMContext):
-    await cb.message.edit_text("📝 Enter your video prompt:")
+    s = get_settings(cb.from_user.id)
+    await cb.message.edit_text(f"📝 Enter your video prompt (Duration: {s['duration']}s | Ratio: {s['ratio']}):")
     await state.set_state(UserStates.waiting_for_prompt)
 
 @dp.message(UserStates.waiting_for_prompt)
 async def process_prompt(message: Message, state: FSMContext):
     s = get_settings(message.from_user.id)
-    msg = await message.answer("⏳ Generating...")
+    msg = await message.answer(f"⏳ Generating {s['duration']}s video ({s['ratio']})...")
+    
     try:
-        conv_id, task_id = await PavoClient().start_video(message.text, s["duration"], s["ratio"], s["image_url"])
-        await msg.edit_text(f"🎥 Task: `{task_id}`\nWaiting in queue (up to 20m)...", parse_mode="Markdown")
+        conv_id, task_id = await PavoClient().start_video(
+            prompt=message.text, 
+            duration=s["duration"], 
+            ratio=s["ratio"], 
+            image_url=s["image_url"],
+            existing_conv_id=s["conversation_id"]
+        )
         
-        for _ in range(120):
+        get_settings(message.from_user.id)["conversation_id"] = conv_id
+        await msg.edit_text(f"🎥 Task: `{task_id}`\n\n⚠️ **Note:** If the queue is full, we will wait. Do not close.", parse_mode="Markdown")
+        
+        # Polling loop
+        wait_time = 0
+        while wait_time < 1200: # 20 minutes max
             await asyncio.sleep(10)
+            wait_time += 10
             try:
-                url = await PavoClient().check_status(conv_id)
+                url = await PavoClient().check_status(conv_id, task_id)
                 if url:
                     await msg.edit_text("✅ Done! Uploading...")
-                    await message.answer_video(url, caption=f"Prompt: {message.text}")
+                    await message.answer_video(url, caption=f"Prompt: {message.text}\nDuration: {s['duration']}s | Ratio: {s['ratio']}")
                     return
             except Exception as e:
-                if "queue is full" in str(e).lower() or "high volume" in str(e).lower(): continue
-                else: await msg.edit_text(f"❌ Failed: {e}"); return
-        await msg.edit_text("⏰ Timed out.")
+                err_msg = str(e)
+                # Exactly like the web app: show the queue error!
+                if "queue is full" in err_msg.lower() or "high volume" in err_msg.lower():
+                    if wait_time % 60 == 0:
+                        await msg.edit_text(f"⏳ **Queue is Full**\n(Waiting {wait_time}s...)\n\n<i>{err_msg}</i>", parse_mode="HTML")
+                    continue
+                else:
+                    await msg.edit_text(f"❌ **Generation Failed:**\n\n{err_msg}")
+                    return
+        await msg.edit_text("⏰ Timed out after 20 minutes.")
     except Exception as e:
         await msg.edit_text(f"❌ Error: {e}")
     finally:

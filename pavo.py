@@ -1,7 +1,6 @@
 import os
 import json
 import time
-import random
 import requests
 import threading
 from flask import Flask, request, jsonify
@@ -10,7 +9,7 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-# ================= PAVO CONFIGURATION =================
+# ================= CONFIGURATION =================
 API_BASE = "https://api.pixa-ai.work"
 PIXA_JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxYTA2YTE2NC0zY2FjLTQzY2QtODM5YS01ZTM4ZTE2NTViZmIiLCJleHAiOjE3OTcwNDU5MDcsIm5iZiI6MTc5NDYyNjcwNywiaWF0IjoxNzk0NjI2NzA3fQ.rExyu1j6MLIMVV8Tl2RW5QBBtBTuqcgLgxAiaHof5Wo"
 
@@ -27,7 +26,6 @@ def safe_json(r):
     try: return r.json()
     except: return {"_raw": r.text, "_status": r.status_code}
 
-# Local cache to track video generation
 video_cache = {}
 
 def monitor_generation(conv_id, task_id):
@@ -53,15 +51,17 @@ def monitor_generation(conv_id, task_id):
                     }
                     return
                 elif msg["type"] == "GenerationFailed" and msg["data"].get("task_id") == task_id:
-                    video_cache[task_id] = {"status": "failed", "error": msg["data"].get("error_message")}
+                    # Extract the exact error string
+                    err_msg = msg["data"].get("error_message", "Queue is full")
+                    video_cache[task_id] = {"status": "failed", "error": err_msg}
                     return
         except Exception:
             pass
     
     if task_id not in video_cache:
-        video_cache[task_id] = {"status": "timeout"}
+        video_cache[task_id] = {"status": "timeout", "error": "Timed out after 20 minutes"}
 
-# ================= API ROUTES =================
+# ================= ROUTES =================
 
 @app.route('/api/generate', methods=['POST'])
 def generate():
@@ -112,23 +112,23 @@ def generate():
         video_cache[task_id] = {"status": "queued"}
         threading.Thread(target=monitor_generation, args=(conv_id, task_id), daemon=True).start()
 
-        return jsonify({"status": "success", "task_id": task_id})
+        return jsonify({"status": "success", "task_id": task_id, "conv_id": conv_id})
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
 @app.route('/api/status/<task_id>', methods=['GET'])
 def check_status(task_id):
-    status = video_cache.get(task_id, {"status": "not_found"})
-    return jsonify(status)
+    return jsonify(video_cache.get(task_id, {"status": "not_found"}))
 
 @app.route('/api/upload', methods=['POST'])
 def upload():
     try:
         if 'image' not in request.files:
             return jsonify({"status": "error", "message": "No file"})
-            
         file = request.files['image']
+        
+        # Step 1: Presigned
         pre_url = f"{API_BASE}/api/v1/file/presigned-url"
         pre_payload = {"purpose": "chat_attachment", "content_type": "image/jpeg", "filename": "upload.jpg"}
         r_pre = requests.post(pre_url, json=pre_payload, headers=get_headers(), timeout=20)
@@ -137,8 +137,10 @@ def upload():
         upload_url = pre_data["data"]["upload_url"]
         public_url = pre_data["data"]["public_url"]
 
+        # Step 2: PUT to AWS
         requests.put(upload_url, data=file.read(), headers={"Content-Type": "image/jpeg"}, timeout=20)
         
+        # Step 3: Inspect
         inspect_url = f"{API_BASE}/api/v1/file/inspect"
         inspect_payload = {"content_type": "image/jpeg", "url": public_url}
         requests.post(inspect_url, json=inspect_payload, headers=get_headers(), timeout=20)

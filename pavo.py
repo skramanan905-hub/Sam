@@ -30,7 +30,6 @@ def safe_json(r):
 video_cache = {}
 conversation_images = {} # Remembers image for Regenerate
 
-# ================= MONITOR THREAD =================
 def monitor_generation(conv_id, task_id):
     wait_time = 0
     while wait_time < 1200: # 20 mins max
@@ -56,19 +55,19 @@ def monitor_generation(conv_id, task_id):
                     return
                 elif msg["type"] == "GenerationFailed" and msg["data"].get("task_id") == task_id:
                     err_msg = msg["data"].get("error_message", "Queue is full")
-                    video_cache[task_id] = {"status": "failed", "error": err_msg}
+                    video_cache[task_id] = {"status": "failed", "error": err_msg, "conv_id": conv_id}
                     return
         except Exception:
             pass
     
     if task_id not in video_cache:
-        video_cache[task_id] = {"status": "timeout", "error": "Timed out after 20 minutes"}
+        video_cache[task_id] = {"status": "timeout", "error": "Timed out after 20 minutes", "conv_id": conv_id}
 
 # ================= ROUTES =================
 
 @app.route('/')
 def home():
-    return "Pavo Backend is Active and running perfectly!"
+    return "Pavo Backend is Active!"
 
 @app.route('/api/generate', methods=['POST'])
 def generate():
@@ -78,23 +77,30 @@ def generate():
         duration = int(d.get("duration", 12))
         ratio = d.get("ratio", "9:16")
         image_url = d.get("image_url")
+        # 🔥 FIX: Accept existing conversation ID if provided
+        existing_conv_id = d.get("conv_id") 
         
-        # 1. Create Conversation
-        conv_url = f"{API_BASE}/api/v1/chat/conversation"
-        conv_payload = {"title": prompt[:60], "folder_id": "", "kb_strict": False}
-        r_conv = requests.post(conv_url, json=conv_payload, headers=get_headers(), timeout=20)
-        conv_data = safe_json(r_conv)
-        
-        try:
-            conv_id = conv_data["data"]["conversation_id"]
-        except KeyError:
-            return jsonify({"status": "error", "message": f"API Error: {conv_data}"})
+        if existing_conv_id:
+            conv_id = existing_conv_id
+            # If regenerating, check if we have a stored image for this conv
+            if not image_url and conv_id in conversation_images:
+                image_url = conversation_images[conv_id]
+        else:
+            # Create new Conversation
+            conv_url = f"{API_BASE}/api/v1/chat/conversation"
+            conv_payload = {"title": prompt[:60], "folder_id": "", "kb_strict": False}
+            r_conv = requests.post(conv_url, json=conv_payload, headers=get_headers(), timeout=20)
+            conv_data = safe_json(r_conv)
+            try:
+                conv_id = conv_data["data"]["conversation_id"]
+            except KeyError:
+                return jsonify({"status": "error", "message": f"API Error: {conv_data}"})
 
-        # Save image to memory for regeneration
+        # Save image to memory for this project
         if image_url:
             conversation_images[conv_id] = image_url
 
-        # 2. Start Video Generation
+        # Start Video Generation
         stream_url = f"{API_BASE}/api/v1/chat/stream"
         payload = {
             "conversation_id": conv_id, "prompt": prompt, "mode": "omni_to_video",
@@ -124,7 +130,7 @@ def generate():
         if not task_id:
             return jsonify({"status": "error", "message": "Failed to start generation stream."})
 
-        video_cache[task_id] = {"status": "queued"}
+        video_cache[task_id] = {"status": "queued", "conv_id": conv_id}
         threading.Thread(target=monitor_generation, args=(conv_id, task_id), daemon=True).start()
 
         return jsonify({"status": "success", "task_id": task_id, "conv_id": conv_id})
@@ -177,15 +183,19 @@ def get_videos(conv_id):
         data = safe_json(r)
         videos = []
         
-        # Check if we have an image saved for this conv
         saved_img = conversation_images.get(conv_id, None)
 
         for turn in data.get("data", {}).get("turns", []):
             prompt = "Unknown"
+            # Extract prompt
             for u_msg in turn.get("user", []):
                 if u_msg.get("type") == "Message":
                     prompt = u_msg["data"].get("content", prompt)
+                # Also look for image URL in the original message
+                elif u_msg.get("type") == "File" and not saved_img:
+                    saved_img = u_msg["data"].get("url")
             
+            # Extract video
             for a_msg in turn.get("assistant", []):
                 if a_msg["type"] == "GenerationSuccess":
                     res = a_msg["data"]["data"]["results"]

@@ -8,7 +8,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app) # 🔥 This allows InfinityFree to talk to Render
+CORS(app)
 
 # ================= PAVO CONFIGURATION =================
 API_BASE = "https://api.pixa-ai.work"
@@ -61,7 +61,7 @@ def monitor_generation(conv_id, task_id):
     if task_id not in video_cache:
         video_cache[task_id] = {"status": "timeout"}
 
-# ================= FLASK ROUTES =================
+# ================= API ROUTES =================
 
 @app.route('/api/generate', methods=['POST'])
 def generate():

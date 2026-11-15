@@ -97,7 +97,7 @@ def check_task_in_history(conv_id, task_id, token):
 def monitor_generation(conv_id, task_id, token):
     wait_time = 0
     while wait_time < 1200:
-        time.sleep(20)  # 20s interval to avoid EdgeOne rate-limit
+        time.sleep(20)
         wait_time += 20
         try:
             res = check_task_in_history(conv_id, task_id, token)
@@ -179,18 +179,23 @@ def generate():
         task_id = None
         stream_text = "I am starting to prepare your creation..."
 
-        with req(
+        r = req(
             "post",
             stream_url,
             json=payload,
             headers={**get_headers(token), "accept": "text/event-stream"},
             stream=True,
             timeout=60
-        ) as r:
-            if r.status_code == 567 or "EdgeOne" in r.text[:300]:
-                return jsonify({"status": "error", "message": f"Blocked by Tencent EdgeOne (HTTP {r.status_code})."})
+        )
+        try:
+            if r.status_code == 567:
+                return jsonify({"status": "error", "message": "Blocked by Tencent EdgeOne WAF (HTTP 567)."})
             if r.status_code != 200:
-                return jsonify({"status": "error", "message": f"Stream HTTP {r.status_code}: {r.text[:200]}"})
+                err_bytes = b"".join(r.iter_content())
+                err_body = err_bytes.decode("utf-8", errors="ignore")[:300]
+                if "EdgeOne" in err_body or "<!doctype html>" in err_body.lower():
+                    return jsonify({"status": "error", "message": f"Blocked by Tencent EdgeOne (HTTP {r.status_code})."})
+                return jsonify({"status": "error", "message": f"Stream HTTP {r.status_code}: {err_body}"})
 
             for line in r.iter_lines():
                 if not line:
@@ -217,6 +222,11 @@ def generate():
                             return jsonify({"status": "error", "message": err_msg, "text": stream_text, "conv_id": conv_id})
                     except Exception:
                         pass
+        finally:
+            try:
+                r.close()
+            except Exception:
+                pass
 
         if not task_id:
             return jsonify({"status": "error", "message": "Failed to start generation stream.", "text": stream_text, "conv_id": conv_id})

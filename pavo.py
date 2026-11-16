@@ -5,7 +5,6 @@ import threading
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
-# Use curl_cffi (Chrome TLS fingerprint) if installed, otherwise fallback to requests
 try:
     from curl_cffi import requests as http_client
     USE_CURL_CFFI = True
@@ -94,11 +93,12 @@ def check_task_in_history(conv_id, task_id, token):
                 return {"status": "failed", "error": err}
     return None
 
-def monitor_generation(conv_id, task_id, token):
+def monitor_generation(conv_id, task_id, token, media_type="video"):
     wait_time = 0
+    step = 4 if media_type == "image" else 20
     while wait_time < 1200:
-        time.sleep(20)
-        wait_time += 20
+        time.sleep(step)
+        wait_time += step
         try:
             res = check_task_in_history(conv_id, task_id, token)
             if res:
@@ -124,8 +124,7 @@ def generate():
             return jsonify({"status": "error", "message": "JWT Token is required"})
 
         prompt = d.get("prompt", "")
-        duration = int(d.get("duration", 12))
-        ratio = d.get("ratio", "9:16")
+        media_type = d.get("media_type", "video")  # "video" or "image"
         image_url = d.get("image_url")
         existing_conv_id = d.get("conv_id")
         is_spam = bool(d.get("is_spam", False))
@@ -155,17 +154,34 @@ def generate():
             conversation_images[conv_id] = image_url
 
         stream_url = f"{API_BASE}/api/v1/chat/stream"
-        payload = {
-            "conversation_id": conv_id,
-            "prompt": prompt,
-            "mode": "omni_to_video",
-            "model": "agnes-video-new-flash",
-            "ratio": ratio,
-            "duration": duration,
-            "resolution": "hd",
-            "sound": True,
-            "creative_prompt_json": json.dumps([{"type": "text", "content": prompt}]),
-        }
+
+        if media_type == "image":
+            ratio = d.get("ratio", "auto")
+            resolution = d.get("resolution", "sd")  # sd=1K, hd=2K, uhd=4K
+            payload = {
+                "conversation_id": conv_id,
+                "prompt": prompt,
+                "mode": "generate_image",
+                "model": "agnes-image",
+                "ratio": ratio,
+                "resolution": resolution,
+                "creative_prompt_json": json.dumps([{"type": "text", "content": prompt}]),
+            }
+        else:
+            duration = int(d.get("duration", 12))
+            ratio = d.get("ratio", "9:16")
+            payload = {
+                "conversation_id": conv_id,
+                "prompt": prompt,
+                "mode": "omni_to_video",
+                "model": "agnes-video-new-flash",
+                "ratio": ratio,
+                "duration": duration,
+                "resolution": "hd",
+                "sound": True,
+                "creative_prompt_json": json.dumps([{"type": "text", "content": prompt}]),
+            }
+
         if image_url:
             payload["images"] = [{
                 "url": image_url,
@@ -178,6 +194,8 @@ def generate():
 
         task_id = None
         stream_text = "I am starting to prepare your creation..."
+        direct_url = None
+        direct_mime = None
 
         r = req(
             "post",
@@ -209,6 +227,17 @@ def generate():
                             stream_text = evt["data"]["content"]
                         elif etype == "GenerationStart":
                             task_id = evt.get("task_id")
+                            # Video takes minutes, so break early & monitor in background.
+                            # Image takes ~15s, so keep reading stream to catch GenerationSuccess directly!
+                            if media_type == "video":
+                                break
+                        elif etype == "GenerationSuccess":
+                            results = (evt.get("data") or {}).get("results") or []
+                            if results and results[0].get("url"):
+                                direct_url = results[0]["url"]
+                                direct_mime = results[0].get("mimetype", "image/jpeg" if media_type == "image" else "video/mp4")
+                            if not task_id:
+                                task_id = evt.get("task_id")
                             break
                         elif etype in ["GenerationFailed", "PromptSafetyBlocked"]:
                             edata = evt.get("data") or {}
@@ -231,10 +260,28 @@ def generate():
         if not task_id:
             return jsonify({"status": "error", "message": "Failed to start generation stream.", "text": stream_text, "conv_id": conv_id})
 
-        video_cache[task_id] = {"status": "queued", "conv_id": conv_id, "text": stream_text}
-        threading.Thread(target=monitor_generation, args=(conv_id, task_id, token), daemon=True).start()
+        if direct_url:
+            video_cache[task_id] = {
+                "status": "success",
+                "conv_id": conv_id,
+                "text": stream_text,
+                "url": direct_url,
+                "mimetype": direct_mime
+            }
+            return jsonify({
+                "status": "success",
+                "done": True,
+                "task_id": task_id,
+                "conv_id": conv_id,
+                "url": direct_url,
+                "mimetype": direct_mime,
+                "text": stream_text
+            })
 
-        return jsonify({"status": "success", "task_id": task_id, "conv_id": conv_id, "text": stream_text})
+        video_cache[task_id] = {"status": "queued", "conv_id": conv_id, "text": stream_text}
+        threading.Thread(target=monitor_generation, args=(conv_id, task_id, token, media_type), daemon=True).start()
+
+        return jsonify({"status": "success", "done": False, "task_id": task_id, "conv_id": conv_id, "text": stream_text})
 
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})

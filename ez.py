@@ -1,178 +1,137 @@
 import os
-import shutil
-import uuid
-import asyncio
-from typing import Optional
-from fastapi import FastAPI, BackgroundTasks, UploadFile, File, Form
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+import time
+import json
+import base64
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 
-# Initialize App
-app = FastAPI()
+try:
+    from curl_cffi import requests as http_client
+    USE_CURL_CFFI = True
+except ImportError:
+    import requests as http_client
+    USE_CURL_CFFI = False
 
-# Enable CORS for frontend integration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], # Change to your frontend domain in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = Flask(__name__)
+CORS(app)
 
-# Create a folder to store temporary uploaded images if it doesn't exist
-UPLOAD_DIR = "temp_uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-# Serve the uploaded files so the frontend can access them
-app.mount("/ai-demo/gen-temp", StaticFiles(directory=UPLOAD_DIR), name="static")
+API_BASE = "https://api.ezmaker.ai"
+FP = "805c38b05d5067353f9ee01049e16e68"
+THEME_VER = "83EmcUoQTUv50LhNx0VrdcK8rcGexcP35FcZDcpgWsAXEyO4xqL5shCY6sFIWB2Q"
+ORIGIN_FROM = "eb2720d2be87a1f0"
+REQUEST_FROM = 37
+FN_NAME = "demo-ai-video-generator"
 
-# Dummy Database to hold our task statuses
-tasks_db = {}
+CAPTURED_FP1 = "PN4BmzV7ykaJvkI+67tZ/ZnE2izDNMkD9Hjej/DrrMykw5ib+PUQ7twUtwLogAzK"
+CAPTURED_GUIDE = "GdfsSukh9eXq2DnWPACJ+6U3/A8DcLtQRuwzbTc8VLW8gRwPAn6MT3Q4LnRwojUNNr2z57cAp/w6HATro8t8PiOVPtVAnS6Vvvv6GiD4QuWk+C/mUK70QFigEBJ91os6aSRd2oilRh0w2M6bAPkDl5iAdKh48Bz0Rdgw5wmfB0s="
 
+def req(method, url, **kwargs):
+    if USE_CURL_CFFI:
+        kwargs.setdefault("impersonate", "chrome")
+    return getattr(http_client, method)(url, **kwargs)
 
-# ==========================================
-# PYDANTIC MODELS (Matching your log data)
-# ==========================================
-class InputData(BaseModel):
-    scene: str = "ezmaker-v1"
-    prompt: str = ""
-    duration: int = 4
-    resolution: str = "540p"
-    source_image: Optional[str] = ""  # Will be empty for Text-to-Video, filled for Image-to-Video
-
-class CreateRequest(BaseModel):
-    fn_name: str
-    call_type: int
-    input: InputData
-    request_from: Optional[int] = 37
-    origin_from: Optional[str] = ""
-
-class StatusRequest(BaseModel):
-    task_id: str
-    fn_name: str = "demo-ai-video-generator"
-    call_type: int = 2
-    consume_type: int = -1
-    request_from: int = 37
-    origin_from: str = ""
-
-
-# ==========================================
-# BACKGROUND VIDEO GENERATOR LOGIC
-# ==========================================
-async def generate_video_task(task_id: str, prompt: str, source_image: str):
-    """
-    This is where your actual AI generation or Browser automation will happen.
-    Because it is a background task, Render's 30-second limit won't kill the request!
-    """
-    if source_image:
-        print(f"[Task {task_id}] Starting IMAGE-TO-VIDEO generation.")
-        print(f"Image URL: {source_image} | Prompt: {prompt}")
-    else:
-        print(f"[Task {task_id}] Starting TEXT-TO-VIDEO generation.")
-        print(f"Prompt: {prompt}")
-
-    # Simulate heavy processing (e.g., your browser automation taking time)
-    await asyncio.sleep(15) 
-
-    # When done, update the database with the final MP4 URL
-    tasks_db[task_id] = {
-        "status": 2, # 2 = Completed
-        "result_url": "https://www.w3schools.com/html/mov_bbb.mp4" # Replace with your actual generated video URL
-    }
-    print(f"[Task {task_id}] Video generation complete!")
-
-
-# ==========================================
-# ENDPOINT 1: UPLOAD IMAGE (For Image-to-Video)
-# ==========================================
-@app.post("/api/v1/aikit/upload-oss-file")
-async def upload_file(file: UploadFile = File(...)):
-    # Create a unique filename
-    file_extension = file.filename.split(".")[-1]
-    unique_filename = f"raw_{uuid.uuid4().hex}.{file_extension}"
-    file_path = os.path.join(UPLOAD_DIR, unique_filename)
-
-    # Save the file to our temp folder
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    # Return the exact JSON structure your log expects
+def get_headers():
     return {
-        "code": 200,
-        "message": "success",
-        "data": {
-            "url": f"ai-demo/gen-temp/{unique_filename}"
+        "sec-ch-ua-platform": "\"Android\"",
+        "x-code": str(int(time.time() * 1000)),
+        "sec-ch-ua": "\"Chromium\";v=\"154\", \"Google Chrome\";v=\"154\", \"Not A(Brand\";v=\"99\"",
+        "fp1": CAPTURED_FP1,
+        "sec-ch-ua-mobile": "?1",
+        "nonce": FN_NAME,
+        "theme-version": THEME_VER,
+        "user-agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36",
+        "accept": "application/json, text/plain, */*",
+        "fp": FP,
+        "content-type": "application/json",
+        "origin": "https://ezmaker.ai",
+        "x-guide": CAPTURED_GUIDE,
+        "sec-fetch-site": "same-site",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-dest": "empty",
+        "referer": "https://ezmaker.ai/",
+        "accept-encoding": "gzip, deflate, br, zstd",
+        "accept-language": "en-GB,en;q=0.9,ta-IN;q=0.8,ta;q=0.7,en-US;q=0.6,zh-CN;q=0.5,zh;q=0.4"
+    }
+
+@app.route('/')
+def home():
+    return "EzMaker Backend Active!"
+
+@app.route('/api/generate', methods=['POST'])
+def generate():
+    try:
+        d = request.json or {}
+        prompt = d.get("prompt", "")
+        duration = int(d.get("duration", 4))
+        resolution = d.get("resolution", "540p")
+        source_image = d.get("source_image")
+
+        inp = {
+            "scene": "ezmaker-v1",
+            "prompt": prompt,
+            "duration": duration,
+            "resolution": resolution
         }
-    }
+        if source_image:
+            inp["source_image"] = source_image
 
+        body = {
+            "fn_name": FN_NAME,
+            "call_type": 2,
+            "input": inp,
+            "request_from": REQUEST_FROM,
+            "origin_from": ORIGIN_FROM
+        }
 
-# ==========================================
-# ENDPOINT 2: CREATE TASK
-# ==========================================
-@app.post("/api/v1/aikit/create")
-async def create_task(request: CreateRequest, background_tasks: BackgroundTasks):
-    task_id = str(uuid.uuid4())
-    
-    # Save the initial status in our "database"
-    tasks_db[task_id] = {"status": 0, "result_url": ""} # 0 = Processing
-    
-    # Send the job to the background
-    background_tasks.add_task(
-        generate_video_task, 
-        task_id=task_id, 
-        prompt=request.input.prompt, 
-        source_image=request.input.source_image
-    )
-    
-    # Immediately return the task ID to the frontend
-    return {
-        "code": 200,
-        "message": "success",
-        "data": {
-            "points_type": -1,
+        r = req("post", f"{API_BASE}/api/v1/aikit/create", json=body, headers=get_headers(), timeout=30)
+        data = r.json()
+        return jsonify({"status": "success", "task_id": data.get("data", {}).get("task_id"), "raw": data})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+@app.route('/api/status/<task_id>', methods=['GET'])
+def check_status(task_id):
+    try:
+        body = {
             "task_id": task_id,
-            "queue_len": 0,
-            "rank": 0,
-            "consume_points": 0,
-            "call_type": request.call_type
+            "fn_name": FN_NAME,
+            "call_type": 2,
+            "consume_type": -1,
+            "request_from": REQUEST_FROM,
+            "origin_from": ORIGIN_FROM
         }
-    }
+        r = req("post", f"{API_BASE}/api/v1/aikit/check-status", json=body, headers=get_headers(), timeout=20)
+        data = r.json()
+        
+        status_val = data.get("data", {}).get("status")
+        if status_val == 2:
+            return jsonify({
+                "status": "success", 
+                "url": data.get("data", {}).get("result_image"),
+                "mimetype": "video/mp4"
+            })
+        elif status_val in [3, 4, -1]:
+            return jsonify({"status": "failed", "error": data.get("data", {}).get("error", "Generation failed")})
+        else:
+            return jsonify({"status": "processing", "raw": data})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
 
+@app.route('/api/upload', methods=['POST'])
+def upload():
+    try:
+        if 'image' not in request.files:
+            return jsonify({"status": "error", "message": "No file"})
+        f = request.files['image']
+        files = {"file": (f.filename or "upload.jpg", f.read(), f.content_type or "image/jpeg")}
+        h = get_headers()
+        h.pop("content-type", None)
+        
+        r = req("post", f"{API_BASE}/api/v1/aikit/upload-oss-file", files=files, headers=h, timeout=60)
+        data = r.json()
+        return jsonify({"status": "success", "url": data.get("data", {}).get("url")})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
 
-# ==========================================
-# ENDPOINT 3: CHECK STATUS
-# ==========================================
-@app.post("/api/v1/aikit/check-status")
-async def check_status(request: StatusRequest):
-    task = tasks_db.get(request.task_id)
-    
-    if not task:
-        return {"code": 404, "message": "Task not found"}
-    
-    # If the video is still generating (Status 0)
-    if task["status"] == 0:
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {
-                "status": 0,
-                "fn_name": request.fn_name
-            }
-        }
-    
-    # If the video is finished (Status 2)
-    return {
-        "code": 200,
-        "message": "success",
-        "data": {
-            "status": 2,
-            "fn_name": request.fn_name,
-            "error": "",
-            "result_image": task["result_url"] # Note: EZMaker calls the video URL 'result_image'
-        }
-    }
-
-# Run the app locally for testing
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))

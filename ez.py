@@ -11,7 +11,7 @@ from curl_cffi import requests as curl_requests
 from flask import Flask
 
 # ⚠️ PUT YOUR NEW BOT TOKEN HERE
-BOT_TOKEN = "8713547959:AAGgPZUzgS36zkxyZn83bUJxz0OOpCnycvg"
+BOT_TOKEN = "8713547959:AAGgPZUzgS36zkxyZn83bUJxz0OOpCnycv0000"
 BASE_URL = "https://raphael.app"
 
 bot = telebot.TeleBot(BOT_TOKEN)

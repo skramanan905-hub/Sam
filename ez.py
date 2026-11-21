@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import re
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -56,6 +57,46 @@ def get_headers():
 def home():
     return "EzMaker Backend Active!"
 
+@app.route('/api/upload', methods=['POST'])
+def upload():
+    try:
+        if 'image' not in request.files:
+            return jsonify({"status": "error", "message": "No file sent from frontend"})
+            
+        f = request.files['image']
+        ctype = f.content_type if f.content_type in ("image/jpeg", "image/png", "image/webp") else "image/jpeg"
+        
+        files = {"file": (f.filename or "upload.jpg", f.read(), ctype)}
+        h = get_headers()
+        h.pop("content-type", None) # Let requests set multipart boundary
+        
+        r = req("post", f"{API_BASE}/api/v1/aikit/upload-oss-file", files=files, headers=h, timeout=60)
+        data = r.json()
+        
+        # --- SMART URL EXTRACTOR ---
+        # We scan the entire JSON for any string that starts with http
+        def find_url(obj):
+            if isinstance(obj, str) and obj.startswith("http"):
+                return obj
+            elif isinstance(obj, dict):
+                for k, v in obj.items():
+                    res = find_url(v)
+                    if res: return res
+            elif isinstance(obj, list):
+                for item in obj:
+                    res = find_url(item)
+                    if res: return res
+            return None
+            
+        url = find_url(data)
+                
+        if not url:
+            return jsonify({"status": "error", "message": f"Could not find URL in response: {json.dumps(data)}"})
+
+        return jsonify({"status": "success", "url": url})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
 @app.route('/api/generate', methods=['POST'])
 def generate():
     try:
@@ -65,6 +106,7 @@ def generate():
         resolution = d.get("resolution", "540p")
         source_image = d.get("source_image")
 
+        # Exact mapping from your Reqable capture
         inp = {
             "scene": "ezmaker-v1",
             "prompt": prompt,
@@ -85,11 +127,10 @@ def generate():
         r = req("post", f"{API_BASE}/api/v1/aikit/create", json=body, headers=get_headers(), timeout=30)
         data = r.json()
         
-        # EzMaker returns task_id inside data
         task_id = data.get("data", {}).get("task_id")
         
         if not task_id:
-            return jsonify({"status": "error", "message": f"EzMaker API Error: {data}"})
+            return jsonify({"status": "error", "message": f"EzMaker API Error: {json.dumps(data)}"})
             
         return jsonify({"status": "success", "task_id": task_id, "raw": data})
     except Exception as e:
@@ -109,6 +150,7 @@ def check_status(task_id):
         r = req("post", f"{API_BASE}/api/v1/aikit/check-status", json=body, headers=get_headers(), timeout=20)
         data = r.json()
         
+        # Mapping from your capture: status 2 means success, result is in "result_image"
         status_val = data.get("data", {}).get("status")
         if status_val == 2:
             return jsonify({
@@ -119,40 +161,7 @@ def check_status(task_id):
         elif status_val in [3, 4, -1]:
             return jsonify({"status": "failed", "error": data.get("data", {}).get("error", "Generation failed")})
         else:
-            return jsonify({"status": "processing", "raw": data})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
-
-@app.route('/api/upload', methods=['POST'])
-def upload():
-    try:
-        if 'image' not in request.files:
-            return jsonify({"status": "error", "message": "No file sent from frontend"})
-            
-        f = request.files['image']
-        # Use exact content type, fallback to jpeg
-        ctype = f.content_type if f.content_type in ("image/jpeg", "image/png", "image/webp") else "image/jpeg"
-        
-        files = {"file": (f.filename or "upload.jpg", f.read(), ctype)}
-        h = get_headers()
-        h.pop("content-type", None) # Let requests set multipart boundary
-        
-        r = req("post", f"{API_BASE}/api/v1/aikit/upload-oss-file", files=files, headers=h, timeout=60)
-        data = r.json()
-        
-        # SMART EXTRACTOR: Try all known possible keys for the URL
-        url = None
-        if "data" in data:
-            if isinstance(data["data"], dict):
-                url = data["data"].get("url") or data["data"].get("file_url") or data["data"].get("source_image")
-            elif isinstance(data["data"], str):
-                url = data["data"]
-                
-        if not url:
-            # If we can't find the URL, send the raw JSON back to the frontend so you can see it
-            return jsonify({"status": "error", "message": f"Could not find URL in response: {data}"})
-
-        return jsonify({"status": "success", "url": url})
+            return jsonify({"status": "processing"})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 

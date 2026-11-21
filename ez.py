@@ -1,169 +1,166 @@
 import os
 import time
 import json
-import re
-from flask import Flask, request, jsonify
+import uuid
+import hashlib
+import base64
+import requests
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-
-try:
-    from curl_cffi import requests as http_client
-    USE_CURL_CFFI = True
-except ImportError:
-    import requests as http_client
-    USE_CURL_CFFI = False
 
 app = Flask(__name__)
 CORS(app)
 
-API_BASE = "https://api.ezmaker.ai"
-FP = "805c38b05d5067353f9ee01049e16e68"
-THEME_VER = "83EmcUoQTUv50LhNx0VrdcK8rcGexcP35FcZDcpgWsAXEyO4xqL5shCY6sFIWB2Q"
-ORIGIN_FROM = "eb2720d2be87a1f0"
-REQUEST_FROM = 37
-FN_NAME = "demo-ai-video-generator"
+BASE_URL = "https://raphael.app"
+USER_AGENT = "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.50 Mobile Safari/537.36"
 
-CAPTURED_FP1 = "PN4BmzV7ykaJvkI+67tZ/ZnE2izDNMkD9Hjej/DrrMykw5ib+PUQ7twUtwLogAzK"
-CAPTURED_GUIDE = "GdfsSukh9eXq2DnWPACJ+6U3/A8DcLtQRuwzbTc8VLW8gRwPAn6MT3Q4LnRwojUNNr2z57cAp/w6HATro8t8PiOVPtVAnS6Vvvv6GiD4QuWk+C/mUK70QFigEBJ91os6aSRd2oilRh0w2M6bAPkDl5iAdKh48Bz0Rdgw5wmfB0s="
-
-def req(method, url, **kwargs):
-    if USE_CURL_CFFI:
-        kwargs.setdefault("impersonate", "chrome")
-    return getattr(http_client, method)(url, **kwargs)
-
-def get_headers():
-    return {
-        "sec-ch-ua-platform": "\"Android\"",
-        "x-code": str(int(time.time() * 1000)),
-        "sec-ch-ua": "\"Chromium\";v=\"154\", \"Google Chrome\";v=\"154\", \"Not A(Brand\";v=\"99\"",
-        "fp1": CAPTURED_FP1,
-        "sec-ch-ua-mobile": "?1",
-        "nonce": FN_NAME,
-        "theme-version": THEME_VER,
-        "user-agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36",
-        "accept": "application/json, text/plain, */*",
-        "fp": FP,
-        "content-type": "application/json",
-        "origin": "https://ezmaker.ai",
-        "x-guide": CAPTURED_GUIDE,
-        "sec-fetch-site": "same-site",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-dest": "empty",
-        "referer": "https://ezmaker.ai/",
-        "accept-encoding": "gzip, deflate, br, zstd",
-        "accept-language": "en-GB,en;q=0.9,ta-IN;q=0.8,ta;q=0.7,en-US;q=0.6,zh-CN;q=0.5,zh;q=0.4"
-    }
+def get_fresh_session():
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": USER_AGENT,
+        "Accept": "*/*",
+        "Origin": BASE_URL,
+        "Referer": f"{BASE_URL}/ai-video-generator",
+        "x-requested-with": "mark.via.gp",
+    })
+    session.post(f"{BASE_URL}/api/video/anon/identity", json={}, timeout=10)
+    return session
 
 @app.route('/')
 def home():
-    return "EzMaker Backend Active!"
-
-@app.route('/api/upload', methods=['POST'])
-def upload():
-    try:
-        if 'image' not in request.files:
-            return jsonify({"status": "error", "message": "No file sent from frontend"})
-            
-        f = request.files['image']
-        ctype = f.content_type if f.content_type in ("image/jpeg", "image/png", "image/webp") else "image/jpeg"
-        
-        files = {"file": (f.filename or "upload.jpg", f.read(), ctype)}
-        h = get_headers()
-        h.pop("content-type", None) # Let requests set multipart boundary
-        
-        r = req("post", f"{API_BASE}/api/v1/aikit/upload-oss-file", files=files, headers=h, timeout=60)
-        data = r.json()
-        
-        # --- SMART URL EXTRACTOR ---
-        # We scan the entire JSON for any string that starts with http
-        def find_url(obj):
-            if isinstance(obj, str) and obj.startswith("http"):
-                return obj
-            elif isinstance(obj, dict):
-                for k, v in obj.items():
-                    res = find_url(v)
-                    if res: return res
-            elif isinstance(obj, list):
-                for item in obj:
-                    res = find_url(item)
-                    if res: return res
-            return None
-            
-        url = find_url(data)
-                
-        if not url:
-            return jsonify({"status": "error", "message": f"Could not find URL in response: {json.dumps(data)}"})
-
-        return jsonify({"status": "success", "url": url})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+    return "Raphael Backend is Running!"
 
 @app.route('/api/generate', methods=['POST'])
 def generate():
-    try:
-        d = request.json or {}
-        prompt = d.get("prompt", "")
-        duration = int(d.get("duration", 4))
-        resolution = d.get("resolution", "540p")
-        source_image = d.get("source_image")
+    prompt = request.form.get('prompt', '')
+    image_file = request.files.get('image')
 
-        # Exact mapping from your Reqable capture
-        inp = {
-            "scene": "ezmaker-v1",
-            "prompt": prompt,
-            "duration": duration,
-            "resolution": resolution
-        }
-        if source_image:
-            inp["source_image"] = source_image
+    if not prompt or not image_file:
+        return jsonify({"status": "error", "message": "Prompt and image are required"})
 
-        body = {
-            "fn_name": FN_NAME,
-            "call_type": 2,
-            "input": inp,
-            "request_from": REQUEST_FROM,
-            "origin_from": ORIGIN_FROM
-        }
+    def generate_stream():
+        try:
+            yield "data: " + json.dumps({"log": "🔄 Generating new identity (Bypassing limit)..."}) + "\n\n"
+            session = get_fresh_session()
 
-        r = req("post", f"{API_BASE}/api/v1/aikit/create", json=body, headers=get_headers(), timeout=30)
-        data = r.json()
-        
-        task_id = data.get("data", {}).get("task_id")
-        
-        if not task_id:
-            return jsonify({"status": "error", "message": f"EzMaker API Error: {json.dumps(data)}"})
-            
-        return jsonify({"status": "success", "task_id": task_id, "raw": data})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+            # 1. Prepare Upload
+            file_data = image_file.read()
+            file_size = len(file_data)
+            checksum_base64 = base64.b64encode(hashlib.sha256(file_data).digest()).decode()
+            client_req_id = str(uuid.uuid4())
 
-@app.route('/api/status/<task_id>', methods=['GET'])
-def check_status(task_id):
-    try:
-        body = {
-            "task_id": task_id,
-            "fn_name": FN_NAME,
-            "call_type": 2,
-            "consume_type": -1,
-            "request_from": REQUEST_FROM,
-            "origin_from": ORIGIN_FROM
-        }
-        r = req("post", f"{API_BASE}/api/v1/aikit/check-status", json=body, headers=get_headers(), timeout=20)
-        data = r.json()
-        
-        # Mapping from your capture: status 2 means success, result is in "result_image"
-        status_val = data.get("data", {}).get("status")
-        if status_val == 2:
-            return jsonify({
-                "status": "success", 
-                "url": data.get("data", {}).get("result_image"),
-                "mimetype": "video/mp4"
-            })
-        elif status_val in [3, 4, -1]:
-            return jsonify({"status": "failed", "error": data.get("data", {}).get("error", "Generation failed")})
-        else:
-            return jsonify({"status": "processing"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+            payload = {
+                "action": "prepare",
+                "model_id": "minimax-h3-turbo",
+                "resolution": "480p-low",
+                "client_request_id": client_req_id,
+                "media_type": "image",
+                "slot_name": "input-start",
+                "file": {"size": file_size, "type": "image/jpeg", "checksumSHA256": checksum_base64}
+            }
+
+            yield "data: " + json.dumps({"log": "☁️ Preparing upload..."}) + "\n\n"
+            r = session.post(f"{BASE_URL}/api/video/upload-input", json=payload, timeout=15)
+            data = r.json()
+            yield "data: " + json.dumps({"log": f"Raw: {data}"}) + "\n\n"
+
+            if "uploadUrl" not in data:
+                yield "data: " + json.dumps({"error": f"Upload prepare failed: {data}"}) + "\n\n"
+                return
+
+            # 2. Upload to R2
+            yield "data: " + json.dumps({"log": "📤 Uploading image to R2..."}) + "\n\n"
+            requests.put(data["uploadUrl"], data=file_data, headers=data["headers"], timeout=30)
+
+            # 3. Confirm Upload
+            yield "data: " + json.dumps({"log": "✅ Confirming upload..."}) + "\n\n"
+            confirm_payload = {
+                "model_id": "minimax-h3-turbo",
+                "resolution": "480p-low",
+                "client_request_id": client_req_id,
+                "media_type": "image",
+                "slot_name": "input-start",
+                "action": "confirm",
+                "authorization": data["authorization"]
+            }
+            r = session.post(f"{BASE_URL}/api/video/upload-input", json=confirm_payload, timeout=15)
+            img_data = r.json()
+            yield "data: " + json.dumps({"log": f"Raw: {img_data}"}) + "\n\n"
+
+            # 4. Ticket
+            yield "data: " + json.dumps({"log": "🎟️ Requesting generation ticket..."}) + "\n\n"
+            ticket_payload = {
+                "prompt": prompt,
+                "aspect": "9:16",
+                "generate_audio": True,
+                "mode": "imageToVideo",
+                "image_urls": [img_data["url"]],
+                "media_sources": [{"mediaType": "image", "index": 0, "authorization": data["authorization"]}],
+                "client_request_id": client_req_id
+            }
+            r = session.post(f"{BASE_URL}/api/video/anon/ticket", json=ticket_payload, timeout=15)
+            ticket_data = r.json()
+            yield "data: " + json.dumps({"log": f"Raw: {ticket_data}"}) + "\n\n"
+
+            ticket = ticket_data.get("data", {}).get("ticket")
+            wait_sec = ticket_data.get("data", {}).get("wait_ms", 80000) / 1000
+
+            if not ticket:
+                yield "data: " + json.dumps({"error": "Ticket failed"}) + "\n\n"
+                return
+
+            # 5. Wait
+            for remaining in range(int(wait_sec), 0, -5):
+                yield "data: " + json.dumps({"log": f"⏳ Queue: waiting {remaining}s..."}) + "\n\n"
+                time.sleep(min(5, remaining))
+
+            # 6. Redeem
+            yield "data: " + json.dumps({"log": "🎫 Redeeming ticket..."}) + "\n\n"
+            r = session.post(f"{BASE_URL}/api/video/anon/redeem", json={"ticket": ticket}, timeout=15)
+            while r.status_code == 409:
+                wait_ms = r.json().get("data", {}).get("wait_ms", 15000)
+                yield "data: " + json.dumps({"log": f"⏳ Server busy. Waiting {int(wait_ms/1000)}s..."}) + "\n\n"
+                time.sleep(wait_ms / 1000)
+                r = session.post(f"{BASE_URL}/api/video/anon/redeem", json={"ticket": ticket}, timeout=15)
+
+            redeem_data = r.json()
+            yield "data: " + json.dumps({"log": f"Raw: {redeem_data}"}) + "\n\n"
+            job_id = redeem_data.get("data", {}).get("job_id")
+
+            if not job_id:
+                yield "data: " + json.dumps({"error": "Redeem failed"}) + "\n\n"
+                return
+
+            # 7. Poll
+            yield "data: " + json.dumps({"log": f"🎬 Rendering video (Job: {job_id})..."}) + "\n\n"
+            last_progress = -1
+            while True:
+                r = session.get(f"{BASE_URL}/api/video/anon/job/{job_id}", timeout=15)
+                job_data = r.json().get("data", {})
+                status = job_data.get("status")
+                progress = job_data.get("progress", 0)
+
+                if status == "complete":
+                    tasks = job_data.get("tasks", [])
+                    if tasks and "videoUrl" in tasks[0].get("assets", {}):
+                        video_url = tasks[0]["assets"]["videoUrl"]
+                        yield "data: " + json.dumps({"log": f"🎉 Success! {video_url}"}) + "\n\n"
+                        yield "data: " + json.dumps({"success": video_url}) + "\n\n"
+                        return
+                elif status == "failed":
+                    yield "data: " + json.dumps({"error": "Rendering failed"}) + "\n\n"
+                    return
+
+                if progress != last_progress:
+                    yield "data: " + json.dumps({"log": f"🎬 Rendering: {progress}%"}) + "\n\n"
+                    last_progress = progress
+
+                time.sleep(3)
+
+        except Exception as e:
+            yield "data: " + json.dumps({"error": str(e)}) + "\n\n"
+
+    return Response(generate_stream(), mimetype="text/event-stream")
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))

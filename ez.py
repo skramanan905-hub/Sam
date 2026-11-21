@@ -5,15 +5,30 @@ import base64
 import time
 import random
 import string
+import threading
+import os
 from curl_cffi import requests as curl_requests
+from flask import Flask
 
-# ⚠️ REVOKE THIS TOKEN ON BOTFATHER AND PUT YOUR NEW ONE HERE
+# ⚠️ PUT YOUR NEW BOT TOKEN HERE
 BOT_TOKEN = "8713547959:AAGgPZUzgS36zkxyZn83bUJxz0OOpCnycvg"
 BASE_URL = "https://raphael.app"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# State dictionary to store user data (waiting for prompt)
+# --- FAKE WEB SERVER (To keep Render alive) ---
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Telegram Bot is running perfectly on Render!"
+
+def run_flask():
+    # Render gives a PORT environment variable
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+# --- BOT LOGIC ---
 user_data = {}
 
 def generate_random_string(length=20):
@@ -52,13 +67,12 @@ def get_fresh_session():
     
     return session
 
-# Helper function to safely edit messages without crashing
 def safe_edit(chat_id, message_id, text):
     try:
         bot.edit_message_text(text, chat_id, message_id)
     except telebot.apihelper.ApiTelegramException as e:
         if "message is not modified" in str(e):
-            pass # Ignore if text is exactly the same
+            pass 
         else:
             print(f"Telegram Edit Error: {e}")
 
@@ -69,19 +83,16 @@ def send_welcome(message):
 @bot.message_handler(content_types=['photo'])
 def handle_photo(message):
     chat_id = message.chat.id
-    
-    # 1. Download image from Telegram
     file_id = message.photo[-1].file_id
     file_info = bot.get_file(file_id)
     downloaded_file = bot.download_file(file_info.file_path)
     
-    # 2. Check if they added a caption.
     if message.caption:
         prompt = message.caption
         process_generation(chat_id, downloaded_file, prompt)
     else:
         user_data[chat_id] = {"image": downloaded_file}
-        bot.reply_to(message, "📸 Image received! Now, please send me the prompt (e.g., 'Make the water ripple').")
+        bot.reply_to(message, "📸 Image received! Now, please send me the prompt.")
 
 @bot.message_handler(content_types=['text'])
 def handle_text(message):
@@ -91,18 +102,16 @@ def handle_text(message):
     if chat_id in user_data and "image" in user_data[chat_id]:
         image_bytes = user_data[chat_id]["image"]
         del user_data[chat_id]
-        
         process_generation(chat_id, image_bytes, prompt)
     else:
         bot.reply_to(message, "Please send an image first, then type your prompt.")
 
 def process_generation(chat_id, image_bytes, prompt):
-    msg = bot.send_message(chat_id, "🔄 Generating new identity (Bypassing limit)...")
+    msg = bot.send_message(chat_id, "🔄 Generating new identity...")
     
     try:
         session = get_fresh_session()
         
-        # 1. Prepare Upload
         file_size = len(image_bytes)
         checksum_base64 = base64.b64encode(hashlib.sha256(image_bytes).digest()).decode()
         client_req_id = str(uuid.uuid4())
@@ -125,11 +134,9 @@ def process_generation(chat_id, image_bytes, prompt):
             safe_edit(chat_id, msg.message_id, f"❌ Upload prepare failed: {data}")
             return
             
-        # 2. Upload to R2
         safe_edit(chat_id, msg.message_id, "📤 Uploading image to server...")
         session.put(data["uploadUrl"], data=image_bytes, headers=data["headers"], timeout=30, impersonate="chrome")
         
-        # 3. Confirm Upload
         confirm_payload = {
             "model_id": "minimax-h3-turbo",
             "resolution": "480p-low",
@@ -146,7 +153,6 @@ def process_generation(chat_id, image_bytes, prompt):
             safe_edit(chat_id, msg.message_id, f"❌ Confirm failed: {img_data}")
             return
             
-        # 4. Ticket
         safe_edit(chat_id, msg.message_id, "🎟️ Requesting generation ticket...")
         ticket_payload = {
             "prompt": prompt,
@@ -162,17 +168,15 @@ def process_generation(chat_id, image_bytes, prompt):
         
         ticket = ticket_data.get("data", {}).get("ticket")
         if not ticket:
-            safe_edit(chat_id, msg.message_id, f"❌ Limit Reached or Server Error:\n{ticket_data}")
+            safe_edit(chat_id, msg.message_id, f"❌ Limit Reached (Render IP blocked):\n{ticket_data}")
             return
             
         wait_sec = ticket_data.get("data", {}).get("wait_ms", 80000) / 1000
         
-        # 5. Wait
         for remaining in range(int(wait_sec), 0, -5):
             safe_edit(chat_id, msg.message_id, f"⏳ In queue: waiting {remaining}s...")
             time.sleep(5)
             
-        # 6. Redeem
         safe_edit(chat_id, msg.message_id, "🎫 Redeeming ticket...")
         r = session.post(f"{BASE_URL}/api/video/anon/redeem", json={"ticket": ticket}, timeout=15, impersonate="chrome")
         
@@ -189,7 +193,6 @@ def process_generation(chat_id, image_bytes, prompt):
             safe_edit(chat_id, msg.message_id, "❌ Redeem failed.")
             return
             
-        # 7. Poll
         safe_edit(chat_id, msg.message_id, "🎬 Rendering video (This takes a minute)...")
         last_progress = -1
         
@@ -219,5 +222,13 @@ def process_generation(chat_id, image_bytes, prompt):
     except Exception as e:
         safe_edit(chat_id, msg.message_id, f"Error: {str(e)}")
 
-print("Bot is running...")
-bot.infinity_polling()
+# --- START BOTH ---
+if __name__ == "__main__":
+    # 1. Start the fake web server in the background
+    t = threading.Thread(target=run_flask)
+    t.daemon = True
+    t.start()
+    
+    # 2. Start the Telegram bot
+    print("Bot is running on Render...")
+    bot.infinity_polling()

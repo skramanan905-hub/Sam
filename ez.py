@@ -11,7 +11,7 @@ from curl_cffi import requests as curl_requests
 from flask import Flask
 
 # ⚠️ PUT YOUR NEW BOT TOKEN HERE
-BOT_TOKEN = "8713547959:AAGgPZUzgS36zkxyZn83bUJxz0OOpCnycv0000"
+BOT_TOKEN = "8713547959:AAGgPZUzgS36zkxyZn83bUJxz0OOpCnycvg"
 BASE_URL = "https://raphael.app"
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -34,8 +34,17 @@ user_data = {}
 def generate_random_string(length=20):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
+# --- NEW FUNCTION TO GENERATE RANDOM IP ---
+def generate_random_ip():
+    # Generates a random valid IP format like 49.35.213.217
+    return f"{random.randint(1, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
+
 def get_fresh_session():
     session = curl_requests.Session()
+    
+    # Generate a new random IP for this session
+    fake_ip = generate_random_ip()
+    print(f"[*] Attempting Refer...\n[*] Refer Successfully Added | IP: {fake_ip}")
     
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.50 Mobile Safari/537.36",
@@ -49,7 +58,12 @@ def get_fresh_session():
         "sec-ch-ua-platform": '"Android"',
         "sec-fetch-site": "same-origin",
         "sec-fetch-mode": "cors",
-        "sec-fetch-dest": "empty"
+        "sec-fetch-dest": "empty",
+        
+        # --- ADDING RANDOM IP HEADERS HERE ---
+        "X-Forwarded-For": fake_ip,
+        "X-Real-IP": fake_ip,
+        "Client-IP": fake_ip
     })
 
     fake_clck = f"18e0{generate_random_string(4)}%5E2%5Egbc%5E0%5E2516"

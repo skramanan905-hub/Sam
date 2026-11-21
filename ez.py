@@ -5,63 +5,125 @@ import uuid
 import hashlib
 import base64
 import random
+import string
+import threading
+from curl_cffi import requests 
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-
-# USE CURL_CFFI to bypass Cloudflare
-try:
-    from curl_cffi import requests as http_client
-except ImportError:
-    import requests as http_client
 
 app = Flask(__name__)
 CORS(app)
 
 BASE_URL = "https://raphael.app"
 
-BROWSERS = [
-    {
-        "user-agent": "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.50 Mobile Safari/537.36",
-        "sec-ch-ua": '"Not-A.Brand";v="99", "Android WebView";v="157", "Chromium";v="157"',
-        "x-requested-with": "mark.via.gp",
-        "sec-ch-ua-platform": '"Android"',
-        "sec-ch-ua-mobile": "?1"
-    },
-    {
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
-        "x-requested-with": "XMLHttpRequest",
-        "sec-ch-ua-platform": '"Windows"',
-        "sec-ch-ua-mobile": "?0"
-    }
-]
+# --- PROXY MANAGER ---
+class ProxyManager:
+    def __init__(self):
+        self.proxies = []
+        self.lock = threading.Lock()
+        self.fetch_proxies()
+
+    def fetch_proxies(self):
+        print("🔄 Fetching fresh proxy list from ProxyScrape...")
+        try:
+            # Fetch HTTP proxies from ProxyScrape public API
+            url = "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&protocol=http&proxy_format=protocolipport&format=text"
+            r = requests.get(url, timeout=20)
+            if r.status_code == 200:
+                # The response is a text list of proxies
+                lines = r.text.strip().split('\n')
+                with self.lock:
+                    self.proxies = [line.strip() for line in lines if line.strip()]
+                print(f"✅ Fetched {len(self.proxies)} proxies.")
+            else:
+                print(f"❌ Failed to fetch proxies: {r.status_code}")
+        except Exception as e:
+            print(f"❌ Error fetching proxies: {e}")
+
+    def get_working_proxy(self):
+        """Tries proxies until one works for a test request."""
+        with self.lock:
+            # Shuffle to avoid always hitting the same (possibly dead) proxy first
+            random.shuffle(self.proxies)
+            proxies_to_test = list(self.proxies) 
+
+        if not proxies_to_test:
+            print("⚠️ No proxies available. Fetching new list...")
+            self.fetch_proxies()
+            with self.lock:
+                proxies_to_test = list(self.proxies)
+                random.shuffle(proxies_to_test)
+
+        for proxy in proxies_to_test:
+            # Format must be http://ip:port for curl_cffi
+            if not proxy.startswith("http"):
+                proxy = f"http://{proxy}"
+            
+            try:
+                # Test the proxy against a lightweight endpoint
+                test_session = requests.Session()
+                test_session.proxies = {"http": proxy, "https": proxy}
+                r = test_session.get("http://httpbin.org/ip", timeout=5, impersonate="chrome")
+                if r.status_code == 200:
+                    print(f"✅ Found working proxy: {proxy}")
+                    return proxy
+            except Exception:
+                # Proxy failed, try the next one
+                continue
+        
+        print("❌ No working proxies found in the current list.")
+        return None
+
+proxy_manager = ProxyManager()
+
+# --- SESSION GENERATOR ---
+def generate_random_string(length=20):
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
 def get_fresh_session():
-    browser = random.choice(BROWSERS)
+    session = requests.Session()
     
-    # Initialize curl_cffi session to mimic real Chrome TLS fingerprint
-    if http_client.__name__ == 'curl_cffi.requests':
-        session = http_client.Session(impersonate="chrome")
-    else:
-        session = http_client.Session()
-
+    # Get a working proxy
+    proxy = proxy_manager.get_working_proxy()
+    if not proxy:
+        raise Exception("Could not find a working proxy. Please try again later.")
+    
+    session.proxies = {"http": proxy, "https": proxy}
+    
     session.headers.update({
-        "User-Agent": browser["user-agent"],
+        "User-Agent": "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.50 Mobile Safari/537.36",
         "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
         "Origin": BASE_URL,
         "Referer": f"{BASE_URL}/ai-video-generator",
-        "sec-ch-ua": browser["sec-ch-ua"],
-        "sec-ch-ua-platform": browser["sec-ch-ua-platform"],
-        "sec-ch-ua-mobile": browser["sec-ch-ua-mobile"],
-        "x-requested-with": browser["x-requested-with"]
+        "x-requested-with": "mark.via.gp",
+        "sec-ch-ua": '"Not-A.Brand";v="99", "Android WebView";v="157", "Chromium";v="157"',
+        "sec-ch-ua-mobile": "?1",
+        "sec-ch-ua-platform": '"Android"',
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-dest": "empty"
     })
+
+    fake_clck = f"18e0{generate_random_string(4)}%5E2%5Egbc%5E0%5E2516"
+    fake_clsk = f"{generate_random_string(10)}%5E1795265175352%5E1%5E1%5Eu.clarity.ms%2Fcollect"
     
-    session.post(f"{BASE_URL}/api/video/anon/identity", json={}, timeout=15)
+    session.cookies.set("_clck", fake_clck)
+    session.cookies.set("_clsk", fake_clsk)
+
+    session.post(
+        f"{BASE_URL}/api/video/anon/identity", 
+        json={}, 
+        timeout=15,
+        impersonate="chrome" 
+    )
+    
     return session
 
+# --- FLASK APP ---
 @app.route('/')
 def home():
-    return "Raphael Backend is Active!"
+    return "Raphael Backend is Running with Auto-Proxy!"
 
 @app.route('/api/generate', methods=['POST'])
 def generate():
@@ -71,15 +133,15 @@ def generate():
     if not prompt or not image_file:
         return jsonify({"status": "error", "message": "Prompt and image are required"})
 
-    # ⚠️ Fix for I/O closed file: read immediately
     image_bytes = image_file.read()
     content_type = image_file.content_type or "image/jpeg"
 
     def generate_stream():
         try:
-            yield "data: " + json.dumps({"log": "🔄 Generating new identity (Bypassing limit)..."}) + "\n\n"
+            yield "data: " + json.dumps({"log": "🔄 Finding working proxy and generating identity..."}) + "\n\n"
             session = get_fresh_session()
 
+            # 1. Prepare Upload
             file_size = len(image_bytes)
             checksum_base64 = base64.b64encode(hashlib.sha256(image_bytes).digest()).decode()
             client_req_id = str(uuid.uuid4())
@@ -95,7 +157,7 @@ def generate():
             }
 
             yield "data: " + json.dumps({"log": "☁️ Preparing upload..."}) + "\n\n"
-            r = session.post(f"{BASE_URL}/api/video/upload-input", json=payload, timeout=15)
+            r = session.post(f"{BASE_URL}/api/video/upload-input", json=payload, timeout=15, impersonate="chrome")
             data = r.json()
             yield "data: " + json.dumps({"log": f"Raw: {data}"}) + "\n\n"
 
@@ -103,9 +165,11 @@ def generate():
                 yield "data: " + json.dumps({"error": f"Upload prepare failed: {data}"}) + "\n\n"
                 return
 
+            # 2. Upload to R2
             yield "data: " + json.dumps({"log": "📤 Uploading image to R2..."}) + "\n\n"
-            http_client.put(data["uploadUrl"], data=image_bytes, headers=data["headers"], timeout=30)
+            r = session.put(data["uploadUrl"], data=image_bytes, headers=data["headers"], timeout=30, impersonate="chrome")
 
+            # 3. Confirm Upload
             yield "data: " + json.dumps({"log": "✅ Confirming upload..."}) + "\n\n"
             confirm_payload = {
                 "model_id": "minimax-h3-turbo",
@@ -116,7 +180,7 @@ def generate():
                 "action": "confirm",
                 "authorization": data["authorization"]
             }
-            r = session.post(f"{BASE_URL}/api/video/upload-input", json=confirm_payload, timeout=15)
+            r = session.post(f"{BASE_URL}/api/video/upload-input", json=confirm_payload, timeout=15, impersonate="chrome")
             img_data = r.json()
             yield "data: " + json.dumps({"log": f"Raw: {img_data}"}) + "\n\n"
 
@@ -124,6 +188,7 @@ def generate():
                 yield "data: " + json.dumps({"error": f"Confirm failed: {img_data}"}) + "\n\n"
                 return
 
+            # 4. Ticket
             yield "data: " + json.dumps({"log": "🎟️ Requesting generation ticket..."}) + "\n\n"
             ticket_payload = {
                 "prompt": prompt,
@@ -134,7 +199,7 @@ def generate():
                 "media_sources": [{"mediaType": "image", "index": 0, "authorization": data["authorization"]}],
                 "client_request_id": client_req_id
             }
-            r = session.post(f"{BASE_URL}/api/video/anon/ticket", json=ticket_payload, timeout=15)
+            r = session.post(f"{BASE_URL}/api/video/anon/ticket", json=ticket_payload, timeout=15, impersonate="chrome")
             ticket_data = r.json()
             yield "data: " + json.dumps({"log": f"Raw: {ticket_data}"}) + "\n\n"
 
@@ -142,20 +207,23 @@ def generate():
             wait_sec = ticket_data.get("data", {}).get("wait_ms", 80000) / 1000
 
             if not ticket:
-                yield "data: " + json.dumps({"error": "Ticket failed"}) + "\n\n"
+                yield "data: " + json.dumps({"error": "Ticket failed. ANON_DAILY_LIMIT hit on this proxy."}) + "\n\n"
                 return
 
+            # 5. Wait
             for remaining in range(int(wait_sec), 0, -5):
                 yield "data: " + json.dumps({"log": f"⏳ Queue: waiting {remaining}s..."}) + "\n\n"
                 time.sleep(min(5, remaining))
 
+            # 6. Redeem
             yield "data: " + json.dumps({"log": "🎫 Redeeming ticket..."}) + "\n\n"
-            r = session.post(f"{BASE_URL}/api/video/anon/redeem", json={"ticket": ticket}, timeout=15)
+            r = session.post(f"{BASE_URL}/api/video/anon/redeem", json={"ticket": ticket}, timeout=15, impersonate="chrome")
+            
             while r.status_code == 409:
                 wait_ms = r.json().get("data", {}).get("wait_ms", 15000)
                 yield "data: " + json.dumps({"log": f"⏳ Server busy. Waiting {int(wait_ms/1000)}s..."}) + "\n\n"
                 time.sleep(wait_ms / 1000)
-                r = session.post(f"{BASE_URL}/api/video/anon/redeem", json={"ticket": ticket}, timeout=15)
+                r = session.post(f"{BASE_URL}/api/video/anon/redeem", json={"ticket": ticket}, timeout=15, impersonate="chrome")
 
             redeem_data = r.json()
             yield "data: " + json.dumps({"log": f"Raw: {redeem_data}"}) + "\n\n"
@@ -165,10 +233,11 @@ def generate():
                 yield "data: " + json.dumps({"error": "Redeem failed"}) + "\n\n"
                 return
 
+            # 7. Poll
             yield "data: " + json.dumps({"log": f"🎬 Rendering video (Job: {job_id})..."}) + "\n\n"
             last_progress = -1
             while True:
-                r = session.get(f"{BASE_URL}/api/video/anon/job/{job_id}", timeout=15)
+                r = session.get(f"{BASE_URL}/api/video/anon/job/{job_id}", timeout=15, impersonate="chrome")
                 job_data = r.json().get("data", {})
                 status = job_data.get("status")
                 progress = job_data.get("progress", 0)

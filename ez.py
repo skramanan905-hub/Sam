@@ -15,63 +15,52 @@ app = Flask(__name__)
 CORS(app)
 
 BASE_URL = "https://raphael.app"
+PROXY_FILE = "proxies.txt" # Make sure this file is in the same folder
 
 # --- PROXY MANAGER ---
 class ProxyManager:
     def __init__(self):
         self.proxies = []
-        self.lock = threading.Lock()
-        self.fetch_proxies()
+        self.load_proxies()
 
-    def fetch_proxies(self):
-        print("🔄 Fetching fresh proxy list from ProxyScrape...")
+    def load_proxies(self):
+        print("🔄 Loading proxies from file...")
         try:
-            # Fetch HTTP proxies from ProxyScrape public API
-            url = "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&protocol=http&proxy_format=protocolipport&format=text"
-            r = requests.get(url, timeout=20)
-            if r.status_code == 200:
-                # The response is a text list of proxies
-                lines = r.text.strip().split('\n')
-                with self.lock:
-                    self.proxies = [line.strip() for line in lines if line.strip()]
-                print(f"✅ Fetched {len(self.proxies)} proxies.")
-            else:
-                print(f"❌ Failed to fetch proxies: {r.status_code}")
+            with open(PROXY_FILE, 'r') as f:
+                lines = f.readlines()
+                self.proxies = [line.strip() for line in lines if line.strip()]
+            print(f"✅ Loaded {len(self.proxies)} proxies.")
         except Exception as e:
-            print(f"❌ Error fetching proxies: {e}")
+            print(f"❌ Error loading proxies: {e}")
 
     def get_working_proxy(self):
-        """Tries proxies until one works for a test request."""
-        with self.lock:
-            # Shuffle to avoid always hitting the same (possibly dead) proxy first
-            random.shuffle(self.proxies)
-            proxies_to_test = list(self.proxies) 
-
-        if not proxies_to_test:
-            print("⚠️ No proxies available. Fetching new list...")
-            self.fetch_proxies()
-            with self.lock:
-                proxies_to_test = list(self.proxies)
-                random.shuffle(proxies_to_test)
+        """Tries proxies until one works. Shuffles to avoid dead IPs."""
+        if not self.proxies:
+            self.load_proxies()
+            
+        proxies_to_test = list(self.proxies)
+        random.shuffle(proxies_to_test)
 
         for proxy in proxies_to_test:
-            # Format must be http://ip:port for curl_cffi
+            # Clean up format
             if not proxy.startswith("http"):
+                if proxy.startswith("socks"):
+                    continue # curl_cffi handles socks poorly sometimes, skip if possible
                 proxy = f"http://{proxy}"
             
             try:
-                # Test the proxy against a lightweight endpoint
+                # Test proxy quickly
                 test_session = requests.Session()
                 test_session.proxies = {"http": proxy, "https": proxy}
-                r = test_session.get("http://httpbin.org/ip", timeout=5, impersonate="chrome")
+                # Test against Raphael's domain to ensure Cloudflare accepts it
+                r = test_session.get(f"{BASE_URL}/api/video/anon/identity", timeout=5, impersonate="chrome")
                 if r.status_code == 200:
                     print(f"✅ Found working proxy: {proxy}")
                     return proxy
             except Exception:
-                # Proxy failed, try the next one
                 continue
         
-        print("❌ No working proxies found in the current list.")
+        print("❌ No working proxies found in list.")
         return None
 
 proxy_manager = ProxyManager()
@@ -83,10 +72,9 @@ def generate_random_string(length=20):
 def get_fresh_session():
     session = requests.Session()
     
-    # Get a working proxy
     proxy = proxy_manager.get_working_proxy()
     if not proxy:
-        raise Exception("Could not find a working proxy. Please try again later.")
+        raise Exception("Could not find a working proxy. The free list might be exhausted. Try again later.")
     
     session.proxies = {"http": proxy, "https": proxy}
     
@@ -123,7 +111,7 @@ def get_fresh_session():
 # --- FLASK APP ---
 @app.route('/')
 def home():
-    return "Raphael Backend is Running with Auto-Proxy!"
+    return "Raphael Backend is Running with Proxies!"
 
 @app.route('/api/generate', methods=['POST'])
 def generate():
@@ -138,8 +126,10 @@ def generate():
 
     def generate_stream():
         try:
-            yield "data: " + json.dumps({"log": "🔄 Finding working proxy and generating identity..."}) + "\n\n"
+            yield "data: " + json.dumps({"log": "🔄 Finding working proxy..."}) + "\n\n"
             session = get_fresh_session()
+            
+            yield "data: " + json.dumps({"log": "✅ Proxy found! Generating identity..."}) + "\n\n"
 
             # 1. Prepare Upload
             file_size = len(image_bytes)

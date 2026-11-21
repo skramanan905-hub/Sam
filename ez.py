@@ -1,7 +1,6 @@
 import os
 import time
 import json
-import base64
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -85,7 +84,14 @@ def generate():
 
         r = req("post", f"{API_BASE}/api/v1/aikit/create", json=body, headers=get_headers(), timeout=30)
         data = r.json()
-        return jsonify({"status": "success", "task_id": data.get("data", {}).get("task_id"), "raw": data})
+        
+        # EzMaker returns task_id inside data
+        task_id = data.get("data", {}).get("task_id")
+        
+        if not task_id:
+            return jsonify({"status": "error", "message": f"EzMaker API Error: {data}"})
+            
+        return jsonify({"status": "success", "task_id": task_id, "raw": data})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 
@@ -121,15 +127,32 @@ def check_status(task_id):
 def upload():
     try:
         if 'image' not in request.files:
-            return jsonify({"status": "error", "message": "No file"})
+            return jsonify({"status": "error", "message": "No file sent from frontend"})
+            
         f = request.files['image']
-        files = {"file": (f.filename or "upload.jpg", f.read(), f.content_type or "image/jpeg")}
+        # Use exact content type, fallback to jpeg
+        ctype = f.content_type if f.content_type in ("image/jpeg", "image/png", "image/webp") else "image/jpeg"
+        
+        files = {"file": (f.filename or "upload.jpg", f.read(), ctype)}
         h = get_headers()
-        h.pop("content-type", None)
+        h.pop("content-type", None) # Let requests set multipart boundary
         
         r = req("post", f"{API_BASE}/api/v1/aikit/upload-oss-file", files=files, headers=h, timeout=60)
         data = r.json()
-        return jsonify({"status": "success", "url": data.get("data", {}).get("url")})
+        
+        # SMART EXTRACTOR: Try all known possible keys for the URL
+        url = None
+        if "data" in data:
+            if isinstance(data["data"], dict):
+                url = data["data"].get("url") or data["data"].get("file_url") or data["data"].get("source_image")
+            elif isinstance(data["data"], str):
+                url = data["data"]
+                
+        if not url:
+            # If we can't find the URL, send the raw JSON back to the frontend so you can see it
+            return jsonify({"status": "error", "message": f"Could not find URL in response: {data}"})
+
+        return jsonify({"status": "success", "url": url})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)})
 

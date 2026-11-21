@@ -6,7 +6,6 @@ import hashlib
 import base64
 import random
 import string
-import threading
 from curl_cffi import requests 
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
@@ -15,68 +14,19 @@ app = Flask(__name__)
 CORS(app)
 
 BASE_URL = "https://raphael.app"
-PROXY_FILE = "proxies.txt" # Make sure this file is in the same folder
 
-# --- PROXY MANAGER ---
-class ProxyManager:
-    def __init__(self):
-        self.proxies = []
-        self.load_proxies()
+# ⚠️ PASTE A PAID PROXY HERE IF YOU EVER GET ONE. 
+# LEAVE IT EMPTY "" IF YOU WANT IT TO RUN FAST BUT GET BLOCKED.
+PROXY_URL = "" 
 
-    def load_proxies(self):
-        print("🔄 Loading proxies from file...")
-        try:
-            with open(PROXY_FILE, 'r') as f:
-                lines = f.readlines()
-                self.proxies = [line.strip() for line in lines if line.strip()]
-            print(f"✅ Loaded {len(self.proxies)} proxies.")
-        except Exception as e:
-            print(f"❌ Error loading proxies: {e}")
-
-    def get_working_proxy(self):
-        """Tries proxies until one works. Shuffles to avoid dead IPs."""
-        if not self.proxies:
-            self.load_proxies()
-            
-        proxies_to_test = list(self.proxies)
-        random.shuffle(proxies_to_test)
-
-        for proxy in proxies_to_test:
-            # Clean up format
-            if not proxy.startswith("http"):
-                if proxy.startswith("socks"):
-                    continue # curl_cffi handles socks poorly sometimes, skip if possible
-                proxy = f"http://{proxy}"
-            
-            try:
-                # Test proxy quickly
-                test_session = requests.Session()
-                test_session.proxies = {"http": proxy, "https": proxy}
-                # Test against Raphael's domain to ensure Cloudflare accepts it
-                r = test_session.get(f"{BASE_URL}/api/video/anon/identity", timeout=5, impersonate="chrome")
-                if r.status_code == 200:
-                    print(f"✅ Found working proxy: {proxy}")
-                    return proxy
-            except Exception:
-                continue
-        
-        print("❌ No working proxies found in list.")
-        return None
-
-proxy_manager = ProxyManager()
-
-# --- SESSION GENERATOR ---
 def generate_random_string(length=20):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
 def get_fresh_session():
     session = requests.Session()
     
-    proxy = proxy_manager.get_working_proxy()
-    if not proxy:
-        raise Exception("Could not find a working proxy. The free list might be exhausted. Try again later.")
-    
-    session.proxies = {"http": proxy, "https": proxy}
+    if PROXY_URL:
+        session.proxies = {"http": PROXY_URL, "https": PROXY_URL}
     
     session.headers.update({
         "User-Agent": "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.50 Mobile Safari/537.36",
@@ -108,10 +58,9 @@ def get_fresh_session():
     
     return session
 
-# --- FLASK APP ---
 @app.route('/')
 def home():
-    return "Raphael Backend is Running with Proxies!"
+    return "Raphael Backend is Running!"
 
 @app.route('/api/generate', methods=['POST'])
 def generate():
@@ -126,10 +75,8 @@ def generate():
 
     def generate_stream():
         try:
-            yield "data: " + json.dumps({"log": "🔄 Finding working proxy..."}) + "\n\n"
+            yield "data: " + json.dumps({"log": "🔄 Generating new identity..."}) + "\n\n"
             session = get_fresh_session()
-            
-            yield "data: " + json.dumps({"log": "✅ Proxy found! Generating identity..."}) + "\n\n"
 
             # 1. Prepare Upload
             file_size = len(image_bytes)
@@ -197,7 +144,7 @@ def generate():
             wait_sec = ticket_data.get("data", {}).get("wait_ms", 80000) / 1000
 
             if not ticket:
-                yield "data: " + json.dumps({"error": "Ticket failed. ANON_DAILY_LIMIT hit on this proxy."}) + "\n\n"
+                yield "data: " + json.dumps({"error": "Ticket failed. ANON_DAILY_LIMIT hit."}) + "\n\n"
                 return
 
             # 5. Wait

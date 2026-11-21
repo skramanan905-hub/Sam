@@ -14,12 +14,13 @@ CORS(app)
 
 BASE_URL = "https://raphael.app"
 
+# ALL ANDROID USER AGENTS (Matching your phone)
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.50 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1"
+    "Mozilla/5.0 (Linux; Android 12; moto g stylus) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 11; Redmi Note 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36"
 ]
 
 def get_fresh_session():
@@ -32,6 +33,8 @@ def get_fresh_session():
         "x-requested-with": "mark.via.gp",
     })
     try:
+        # Delay to look like human
+        time.sleep(random.uniform(0.5, 1.5))
         session.post(f"{BASE_URL}/api/video/anon/identity", json={}, timeout=10)
     except:
         pass
@@ -43,6 +46,7 @@ def home():
 
 @app.route('/api/generate', methods=['POST'])
 def generate():
+    # FIXED: Using request.files.get for the image
     prompt = request.form.get('prompt', '')
     image_file = request.files.get('image')
 
@@ -56,7 +60,6 @@ def generate():
         try:
             yield "data: " + json.dumps({"log": "🔄 Initializing request..."}) + "\n\n"
             
-            # RETRY LOGIC: If we hit a limit, wait 5s and try a new browser identity
             max_retries = 4
             ticket = None
             session = None
@@ -118,7 +121,7 @@ def generate():
 
                 if ticket:
                     yield "data: " + json.dumps({"log": f"✅ Ticket acquired!"}) + "\n\n"
-                    break # Success!
+                    break 
                 else:
                     yield "data: " + json.dumps({"log": f"⚠️ Limit hit. Changing identity, waiting 5s..."}) + "\n\n"
                     time.sleep(5)
@@ -127,7 +130,6 @@ def generate():
                 yield "data: " + json.dumps({"error": "Failed to bypass limit. Render IP is temporarily blocked."}) + "\n\n"
                 return
 
-            # Wait in queue
             for remaining in range(int(wait_sec), 0, -5):
                 yield "data: " + json.dumps({"log": f"⏳ Queue: waiting {remaining}s..."}) + "\n\n"
                 time.sleep(min(5, remaining))

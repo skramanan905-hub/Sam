@@ -14,7 +14,6 @@ CORS(app)
 
 BASE_URL = "https://raphael.app"
 
-# --- ROTATION POOLS ---
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
@@ -23,46 +22,29 @@ USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1"
 ]
 
-# Note: Public free proxies often fail. For 100% uptime, use a paid rotating proxy here.
-PROXIES = [
-    None, # First attempt: Direct connection
-    # "http://user:pass@ip:port", # Add your proxies here if needed
-]
-
 def get_fresh_session():
     session = requests.Session()
-    
-    # Randomize User-Agent
-    ua = random.choice(USER_AGENTS)
     session.headers.update({
-        "User-Agent": ua,
+        "User-Agent": random.choice(USER_AGENTS),
         "Accept": "*/*",
         "Origin": BASE_URL,
         "Referer": f"{BASE_URL}/ai-video-generator",
         "x-requested-with": "mark.via.gp",
     })
-    
-    # Assign a random proxy if available
-    proxy = random.choice(PROXIES)
-    if proxy:
-        session.proxies = {"http": proxy, "https": proxy}
-        
     try:
-        # Get new cookie
         session.post(f"{BASE_URL}/api/video/anon/identity", json={}, timeout=10)
     except:
         pass
-        
     return session
 
 @app.route('/')
 def home():
-    return "Raphael Backend is Running! (Randomized Mode)"
+    return "Raphael Backend is Running!"
 
 @app.route('/api/generate', methods=['POST'])
 def generate():
     prompt = request.form.get('prompt', '')
-    image_file = request.form.get('image')
+    image_file = request.files.get('image')
 
     if not prompt or not image_file:
         return jsonify({"status": "error", "message": "Prompt and image are required"})
@@ -72,17 +54,18 @@ def generate():
 
     def generate_stream():
         try:
-            yield "data: " + json.dumps({"log": "🔄 Bypassing limits (New UA + Proxy)..."}) + "\n\n"
+            yield "data: " + json.dumps({"log": "🔄 Initializing request..."}) + "\n\n"
             
-            # Retry logic for limits
-            max_retries = 3
+            # RETRY LOGIC: If we hit a limit, wait 5s and try a new browser identity
+            max_retries = 4
+            ticket = None
+            session = None
+            client_req_id = str(uuid.uuid4())
+            
             for attempt in range(max_retries):
                 session = get_fresh_session()
-                
-                # 1. Prepare Upload
                 file_size = len(image_bytes)
                 checksum_base64 = base64.b64encode(hashlib.sha256(image_bytes).digest()).decode()
-                client_req_id = str(uuid.uuid4())
 
                 payload = {
                     "action": "prepare",
@@ -94,19 +77,17 @@ def generate():
                     "file": {"size": file_size, "type": content_type, "checksumSHA256": checksum_base64}
                 }
 
-                yield "data: " + json.dumps({"log": f"☁️ Preparing upload (Attempt {attempt+1})..."}) + "\n\n"
+                yield "data: " + json.dumps({"log": f"☁️ Preparing upload (Attempt {attempt+1}/{max_retries})..."}) + "\n\n"
                 r = session.post(f"{BASE_URL}/api/video/upload-input", json=payload, timeout=15)
                 data = r.json()
 
                 if "uploadUrl" not in data:
-                    yield "data: " + json.dumps({"log": f"❌ Upload failed: {data.get('message', 'Unknown')}"}) + "\n\n"
+                    yield "data: " + json.dumps({"log": f"❌ Upload prepare failed: {data}"}) + "\n\n"
+                    time.sleep(3)
                     continue
 
-                # 2. Upload to R2
-                yield "data: " + json.dumps({"log": "📤 Uploading image to R2..."}) + "\n\n"
                 requests.put(data["uploadUrl"], data=image_bytes, headers=data["headers"], timeout=30)
 
-                # 3. Confirm Upload
                 confirm_payload = {
                     "model_id": "minimax-h3-turbo",
                     "resolution": "480p-low",
@@ -119,7 +100,6 @@ def generate():
                 r = session.post(f"{BASE_URL}/api/video/upload-input", json=confirm_payload, timeout=15)
                 img_data = r.json()
 
-                # 4. Ticket
                 yield "data: " + json.dumps({"log": "🎟️ Requesting generation ticket..."}) + "\n\n"
                 ticket_payload = {
                     "prompt": prompt,
@@ -136,23 +116,22 @@ def generate():
                 ticket = ticket_data.get("data", {}).get("ticket")
                 wait_sec = ticket_data.get("data", {}).get("wait_ms", 80000) / 1000
 
-                if not ticket:
-                    yield "data: " + json.dumps({"log": f"❌ Ticket Limit Hit: {ticket_data}. Retrying with new identity..."}) + "\n\n"
-                    time.sleep(2)
-                    continue # Try again with new session
-
-                # SUCCESSFUL TICKET
-                break
-            else:
-                yield "data: " + json.dumps({"error": "Failed to get ticket after 3 attempts. IP might be blocked."}) + "\n\n"
+                if ticket:
+                    yield "data: " + json.dumps({"log": f"✅ Ticket acquired!"}) + "\n\n"
+                    break # Success!
+                else:
+                    yield "data: " + json.dumps({"log": f"⚠️ Limit hit. Changing identity, waiting 5s..."}) + "\n\n"
+                    time.sleep(5)
+            
+            if not ticket:
+                yield "data: " + json.dumps({"error": "Failed to bypass limit. Render IP is temporarily blocked."}) + "\n\n"
                 return
 
-            # 5. Wait
+            # Wait in queue
             for remaining in range(int(wait_sec), 0, -5):
                 yield "data: " + json.dumps({"log": f"⏳ Queue: waiting {remaining}s..."}) + "\n\n"
                 time.sleep(min(5, remaining))
 
-            # 6. Redeem
             yield "data: " + json.dumps({"log": "🎫 Redeeming ticket..."}) + "\n\n"
             r = session.post(f"{BASE_URL}/api/video/anon/redeem", json={"ticket": ticket}, timeout=15)
             while r.status_code == 409:
@@ -168,7 +147,6 @@ def generate():
                 yield "data: " + json.dumps({"error": "Redeem failed"}) + "\n\n"
                 return
 
-            # 7. Poll
             yield "data: " + json.dumps({"log": f"🎬 Rendering video (Job: {job_id})..."}) + "\n\n"
             last_progress = -1
             while True:
@@ -181,7 +159,7 @@ def generate():
                     tasks = job_data.get("tasks", [])
                     if tasks and "videoUrl" in tasks[0].get("assets", {}):
                         video_url = tasks[0]["assets"]["videoUrl"]
-                        yield "data: " + json.dumps({"log": f"🎉 Success! {video_url}"}) + "\n\n"
+                        yield "data: " + json.dumps({"log": f"🎉 Success!"}) + "\n\n"
                         yield "data: " + json.dumps({"success": video_url}) + "\n\n"
                         return
                 elif status == "failed":

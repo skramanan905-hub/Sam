@@ -6,7 +6,9 @@ import hashlib
 import base64
 import random
 import string
-import requests
+
+# Use curl_cffi instead of requests to bypass Cloudflare's TLS fingerprinting
+from curl_cffi import requests 
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
@@ -20,8 +22,10 @@ def generate_random_string(length=20):
 
 def get_fresh_session():
     """
-    Creates a session that perfectly mimics a fresh browser that just cleared its cache.
+    Creates a session that perfectly mimics a fresh Chrome browser 
+    that just cleared its cache.
     """
+    # Initialize curl_cffi session
     session = requests.Session()
     
     # 1. Set exact browser headers
@@ -40,22 +44,28 @@ def get_fresh_session():
         "sec-fetch-dest": "empty"
     })
 
-    # 2. Generate FAKE Microsoft Clarity cookies (This tricks the server into thinking it's a new browser)
+    # 2. Generate FAKE Microsoft Clarity cookies 
+    # This is CRITICAL. Without these, the server blocks you immediately.
     fake_clck = f"18e0{generate_random_string(4)}%5E2%5Egbc%5E0%5E2516"
     fake_clsk = f"{generate_random_string(10)}%5E1795265175352%5E1%5E1%5Eu.clarity.ms%2Fcollect"
     
-    # 3. Set the cookies BEFORE requesting identity
     session.cookies.set("_clck", fake_clck)
     session.cookies.set("_clsk", fake_clsk)
 
-    # 4. Request the new identity
-    session.post(f"{BASE_URL}/api/video/anon/identity", json={}, timeout=10)
+    # 3. Request the new identity
+    # 'impersonate="chrome"' is the magic that bypasses the TLS fingerprint check
+    session.post(
+        f"{BASE_URL}/api/video/anon/identity", 
+        json={}, 
+        timeout=10,
+        impersonate="chrome" 
+    )
     
     return session
 
 @app.route('/')
 def home():
-    return "Raphael Backend is Running!"
+    return "Raphael Backend is Running with curl_cffi!"
 
 @app.route('/api/generate', methods=['POST'])
 def generate():
@@ -65,13 +75,12 @@ def generate():
     if not prompt or not image_file:
         return jsonify({"status": "error", "message": "Prompt and image are required"})
 
-    # Read the file immediately before the stream starts
     image_bytes = image_file.read()
     content_type = image_file.content_type or "image/jpeg"
 
     def generate_stream():
         try:
-            yield "data: " + json.dumps({"log": "🔄 Generating new identity (Bypassing limit)..."}) + "\n\n"
+            yield "data: " + json.dumps({"log": "🔄 Generating new identity (Spoofing Chrome)..."}) + "\n\n"
             session = get_fresh_session()
 
             # 1. Prepare Upload
@@ -90,7 +99,12 @@ def generate():
             }
 
             yield "data: " + json.dumps({"log": "☁️ Preparing upload..."}) + "\n\n"
-            r = session.post(f"{BASE_URL}/api/video/upload-input", json=payload, timeout=15)
+            r = session.post(
+                f"{BASE_URL}/api/video/upload-input", 
+                json=payload, 
+                timeout=15,
+                impersonate="chrome"
+            )
             data = r.json()
             yield "data: " + json.dumps({"log": f"Raw: {data}"}) + "\n\n"
 
@@ -98,9 +112,19 @@ def generate():
                 yield "data: " + json.dumps({"error": f"Upload prepare failed: {data}"}) + "\n\n"
                 return
 
-            # 2. Upload to R2
+            # 2. Upload to R2 (Cloudflare Storage)
+            # Note: We must use session.put() here to keep the impersonation
             yield "data: " + json.dumps({"log": "📤 Uploading image to R2..."}) + "\n\n"
-            requests.put(data["uploadUrl"], data=image_bytes, headers=data["headers"], timeout=30)
+            r = session.put(
+                data["uploadUrl"], 
+                data=image_bytes, 
+                headers=data["headers"], 
+                timeout=30,
+                impersonate="chrome"
+            )
+            
+            if r.status_code not in [200, 201]:
+                yield "data: " + json.dumps({"log": f"⚠️ R2 upload warning: {r.status_code}"}) + "\n\n"
 
             # 3. Confirm Upload
             yield "data: " + json.dumps({"log": "✅ Confirming upload..."}) + "\n\n"
@@ -113,7 +137,12 @@ def generate():
                 "action": "confirm",
                 "authorization": data["authorization"]
             }
-            r = session.post(f"{BASE_URL}/api/video/upload-input", json=confirm_payload, timeout=15)
+            r = session.post(
+                f"{BASE_URL}/api/video/upload-input", 
+                json=confirm_payload, 
+                timeout=15,
+                impersonate="chrome"
+            )
             img_data = r.json()
             yield "data: " + json.dumps({"log": f"Raw: {img_data}"}) + "\n\n"
 
@@ -132,7 +161,12 @@ def generate():
                 "media_sources": [{"mediaType": "image", "index": 0, "authorization": data["authorization"]}],
                 "client_request_id": client_req_id
             }
-            r = session.post(f"{BASE_URL}/api/video/anon/ticket", json=ticket_payload, timeout=15)
+            r = session.post(
+                f"{BASE_URL}/api/video/anon/ticket", 
+                json=ticket_payload, 
+                timeout=15,
+                impersonate="chrome"
+            )
             ticket_data = r.json()
             yield "data: " + json.dumps({"log": f"Raw: {ticket_data}"}) + "\n\n"
 
@@ -140,7 +174,7 @@ def generate():
             wait_sec = ticket_data.get("data", {}).get("wait_ms", 80000) / 1000
 
             if not ticket:
-                yield "data: " + json.dumps({"error": "Ticket failed"}) + "\n\n"
+                yield "data: " + json.dumps({"error": "Ticket failed. Limit bypass failed."}) + "\n\n"
                 return
 
             # 5. Wait
@@ -150,12 +184,23 @@ def generate():
 
             # 6. Redeem
             yield "data: " + json.dumps({"log": "🎫 Redeeming ticket..."}) + "\n\n"
-            r = session.post(f"{BASE_URL}/api/video/anon/redeem", json={"ticket": ticket}, timeout=15)
+            r = session.post(
+                f"{BASE_URL}/api/video/anon/redeem", 
+                json={"ticket": ticket}, 
+                timeout=15,
+                impersonate="chrome"
+            )
+            
             while r.status_code == 409:
                 wait_ms = r.json().get("data", {}).get("wait_ms", 15000)
                 yield "data: " + json.dumps({"log": f"⏳ Server busy. Waiting {int(wait_ms/1000)}s..."}) + "\n\n"
                 time.sleep(wait_ms / 1000)
-                r = session.post(f"{BASE_URL}/api/video/anon/redeem", json={"ticket": ticket}, timeout=15)
+                r = session.post(
+                    f"{BASE_URL}/api/video/anon/redeem", 
+                    json={"ticket": ticket}, 
+                    timeout=15,
+                    impersonate="chrome"
+                )
 
             redeem_data = r.json()
             yield "data: " + json.dumps({"log": f"Raw: {redeem_data}"}) + "\n\n"
@@ -169,7 +214,11 @@ def generate():
             yield "data: " + json.dumps({"log": f"🎬 Rendering video (Job: {job_id})..."}) + "\n\n"
             last_progress = -1
             while True:
-                r = session.get(f"{BASE_URL}/api/video/anon/job/{job_id}", timeout=15)
+                r = session.get(
+                    f"{BASE_URL}/api/video/anon/job/{job_id}", 
+                    timeout=15,
+                    impersonate="chrome"
+                )
                 job_data = r.json().get("data", {})
                 status = job_data.get("status")
                 progress = job_data.get("progress", 0)

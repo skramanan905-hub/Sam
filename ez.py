@@ -5,6 +5,7 @@ import uuid
 import hashlib
 import base64
 import random
+import string
 import requests
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
@@ -14,64 +15,42 @@ CORS(app)
 
 BASE_URL = "https://raphael.app"
 
-# --- RANDOM BROWSER PROFILES ---
-BROWSERS = [
-    {
-        "user-agent": "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.50 Mobile Safari/537.36",
-        "sec-ch-ua": '"Not-A.Brand";v="99", "Android WebView";v="157", "Chromium";v="157"',
-        "x-requested-with": "mark.via.gp",
-        "sec-ch-ua-platform": '"Android"',
-        "sec-ch-ua-mobile": "?1"
-    },
-    {
-        "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
-        "sec-ch-ua": '"Apple WebKit";v="605", "Safari";v="17"',
-        "x-requested-with": "com.apple.mobilesafari",
-        "sec-ch-ua-platform": '"iOS"',
-        "sec-ch-ua-mobile": "?1"
-    },
-    {
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
-        "x-requested-with": "XMLHttpRequest",
-        "sec-ch-ua-platform": '"Windows"',
-        "sec-ch-ua-mobile": "?0"
-    },
-    {
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "sec-ch-ua": '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
-        "x-requested-with": "XMLHttpRequest",
-        "sec-ch-ua-platform": '"macOS"',
-        "sec-ch-ua-mobile": "?0"
-    },
-    {
-        "user-agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36",
-        "sec-ch-ua": '"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',
-        "x-requested-with": "mark.via.gp",
-        "sec-ch-ua-platform": '"Android"',
-        "sec-ch-ua-mobile": "?1"
-    }
-]
+def generate_random_string(length=20):
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
 def get_fresh_session():
-    """Generates a new cookie AND picks a random browser profile."""
-    # Pick a random browser
-    browser = random.choice(BROWSERS)
-    
+    """
+    Creates a session that perfectly mimics a fresh browser that just cleared its cache.
+    """
     session = requests.Session()
+    
+    # 1. Set exact browser headers
     session.headers.update({
-        "User-Agent": browser["user-agent"],
+        "User-Agent": "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.50 Mobile Safari/537.36",
         "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
         "Origin": BASE_URL,
         "Referer": f"{BASE_URL}/ai-video-generator",
-        "sec-ch-ua": browser["sec-ch-ua"],
-        "sec-ch-ua-platform": browser["sec-ch-ua-platform"],
-        "sec-ch-ua-mobile": browser["sec-ch-ua-mobile"],
-        "x-requested-with": browser["x-requested-with"]
+        "x-requested-with": "mark.via.gp",
+        "sec-ch-ua": '"Not-A.Brand";v="99", "Android WebView";v="157", "Chromium";v="157"',
+        "sec-ch-ua-mobile": "?1",
+        "sec-ch-ua-platform": '"Android"',
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-dest": "empty"
     })
+
+    # 2. Generate FAKE Microsoft Clarity cookies (This tricks the server into thinking it's a new browser)
+    fake_clck = f"18e0{generate_random_string(4)}%5E2%5Egbc%5E0%5E2516"
+    fake_clsk = f"{generate_random_string(10)}%5E1795265175352%5E1%5E1%5Eu.clarity.ms%2Fcollect"
     
-    # Get new identity (New Cookie)
+    # 3. Set the cookies BEFORE requesting identity
+    session.cookies.set("_clck", fake_clck)
+    session.cookies.set("_clsk", fake_clsk)
+
+    # 4. Request the new identity
     session.post(f"{BASE_URL}/api/video/anon/identity", json={}, timeout=10)
+    
     return session
 
 @app.route('/')
@@ -86,13 +65,13 @@ def generate():
     if not prompt or not image_file:
         return jsonify({"status": "error", "message": "Prompt and image are required"})
 
-    # Read file immediately to prevent I/O closed file error
+    # Read the file immediately before the stream starts
     image_bytes = image_file.read()
     content_type = image_file.content_type or "image/jpeg"
 
     def generate_stream():
         try:
-            yield "data: " + json.dumps({"log": "🔄 Picking random browser & generating new identity..."}) + "\n\n"
+            yield "data: " + json.dumps({"log": "🔄 Generating new identity (Bypassing limit)..."}) + "\n\n"
             session = get_fresh_session()
 
             # 1. Prepare Upload

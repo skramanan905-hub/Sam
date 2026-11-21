@@ -38,15 +38,18 @@ def generate():
     if not prompt or not image_file:
         return jsonify({"status": "error", "message": "Prompt and image are required"})
 
+    # ⚠️ FIX: Read the file IMMEDIATELY before the generator stream starts
+    image_bytes = image_file.read()
+    content_type = image_file.content_type or "image/jpeg"
+
     def generate_stream():
         try:
             yield "data: " + json.dumps({"log": "🔄 Generating new identity (Bypassing limit)..."}) + "\n\n"
             session = get_fresh_session()
 
             # 1. Prepare Upload
-            file_data = image_file.read()
-            file_size = len(file_data)
-            checksum_base64 = base64.b64encode(hashlib.sha256(file_data).digest()).decode()
+            file_size = len(image_bytes)
+            checksum_base64 = base64.b64encode(hashlib.sha256(image_bytes).digest()).decode()
             client_req_id = str(uuid.uuid4())
 
             payload = {
@@ -56,7 +59,7 @@ def generate():
                 "client_request_id": client_req_id,
                 "media_type": "image",
                 "slot_name": "input-start",
-                "file": {"size": file_size, "type": "image/jpeg", "checksumSHA256": checksum_base64}
+                "file": {"size": file_size, "type": content_type, "checksumSHA256": checksum_base64}
             }
 
             yield "data: " + json.dumps({"log": "☁️ Preparing upload..."}) + "\n\n"
@@ -70,7 +73,7 @@ def generate():
 
             # 2. Upload to R2
             yield "data: " + json.dumps({"log": "📤 Uploading image to R2..."}) + "\n\n"
-            requests.put(data["uploadUrl"], data=file_data, headers=data["headers"], timeout=30)
+            requests.put(data["uploadUrl"], data=image_bytes, headers=data["headers"], timeout=30)
 
             # 3. Confirm Upload
             yield "data: " + json.dumps({"log": "✅ Confirming upload..."}) + "\n\n"
@@ -86,6 +89,10 @@ def generate():
             r = session.post(f"{BASE_URL}/api/video/upload-input", json=confirm_payload, timeout=15)
             img_data = r.json()
             yield "data: " + json.dumps({"log": f"Raw: {img_data}"}) + "\n\n"
+
+            if "url" not in img_data:
+                yield "data: " + json.dumps({"error": f"Confirm failed: {img_data}"}) + "\n\n"
+                return
 
             # 4. Ticket
             yield "data: " + json.dumps({"log": "🎟️ Requesting generation ticket..."}) + "\n\n"

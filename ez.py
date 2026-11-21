@@ -4,6 +4,7 @@ import json
 import uuid
 import hashlib
 import base64
+import random
 import requests
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
@@ -12,17 +13,64 @@ app = Flask(__name__)
 CORS(app)
 
 BASE_URL = "https://raphael.app"
-USER_AGENT = "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.50 Mobile Safari/537.36"
+
+# --- RANDOM BROWSER PROFILES ---
+BROWSERS = [
+    {
+        "user-agent": "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.50 Mobile Safari/537.36",
+        "sec-ch-ua": '"Not-A.Brand";v="99", "Android WebView";v="157", "Chromium";v="157"',
+        "x-requested-with": "mark.via.gp",
+        "sec-ch-ua-platform": '"Android"',
+        "sec-ch-ua-mobile": "?1"
+    },
+    {
+        "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+        "sec-ch-ua": '"Apple WebKit";v="605", "Safari";v="17"',
+        "x-requested-with": "com.apple.mobilesafari",
+        "sec-ch-ua-platform": '"iOS"',
+        "sec-ch-ua-mobile": "?1"
+    },
+    {
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "sec-ch-ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+        "x-requested-with": "XMLHttpRequest",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-ch-ua-mobile": "?0"
+    },
+    {
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "sec-ch-ua": '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
+        "x-requested-with": "XMLHttpRequest",
+        "sec-ch-ua-platform": '"macOS"',
+        "sec-ch-ua-mobile": "?0"
+    },
+    {
+        "user-agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36",
+        "sec-ch-ua": '"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',
+        "x-requested-with": "mark.via.gp",
+        "sec-ch-ua-platform": '"Android"',
+        "sec-ch-ua-mobile": "?1"
+    }
+]
 
 def get_fresh_session():
+    """Generates a new cookie AND picks a random browser profile."""
+    # Pick a random browser
+    browser = random.choice(BROWSERS)
+    
     session = requests.Session()
     session.headers.update({
-        "User-Agent": USER_AGENT,
+        "User-Agent": browser["user-agent"],
         "Accept": "*/*",
         "Origin": BASE_URL,
         "Referer": f"{BASE_URL}/ai-video-generator",
-        "x-requested-with": "mark.via.gp",
+        "sec-ch-ua": browser["sec-ch-ua"],
+        "sec-ch-ua-platform": browser["sec-ch-ua-platform"],
+        "sec-ch-ua-mobile": browser["sec-ch-ua-mobile"],
+        "x-requested-with": browser["x-requested-with"]
     })
+    
+    # Get new identity (New Cookie)
     session.post(f"{BASE_URL}/api/video/anon/identity", json={}, timeout=10)
     return session
 
@@ -38,13 +86,13 @@ def generate():
     if not prompt or not image_file:
         return jsonify({"status": "error", "message": "Prompt and image are required"})
 
-    # ⚠️ FIX: Read the file IMMEDIATELY before the generator stream starts
+    # Read file immediately to prevent I/O closed file error
     image_bytes = image_file.read()
     content_type = image_file.content_type or "image/jpeg"
 
     def generate_stream():
         try:
-            yield "data: " + json.dumps({"log": "🔄 Generating new identity (Bypassing limit)..."}) + "\n\n"
+            yield "data: " + json.dumps({"log": "🔄 Picking random browser & generating new identity..."}) + "\n\n"
             session = get_fresh_session()
 
             # 1. Prepare Upload

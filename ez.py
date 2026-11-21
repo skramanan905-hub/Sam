@@ -4,9 +4,7 @@ import json
 import uuid
 import hashlib
 import base64
-import random
-import string
-from curl_cffi import requests 
+import requests
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
@@ -14,48 +12,18 @@ app = Flask(__name__)
 CORS(app)
 
 BASE_URL = "https://raphael.app"
-
-# ⚠️ PASTE A PAID PROXY HERE IF YOU EVER GET ONE. 
-# LEAVE IT EMPTY "" IF YOU WANT IT TO RUN FAST BUT GET BLOCKED.
-PROXY_URL = "" 
-
-def generate_random_string(length=20):
-    return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+USER_AGENT = "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.50 Mobile Safari/537.36"
 
 def get_fresh_session():
     session = requests.Session()
-    
-    if PROXY_URL:
-        session.proxies = {"http": PROXY_URL, "https": PROXY_URL}
-    
     session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Linux; Android 15; I2301 Build/AP3A.240905.015.A2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.8103.50 Mobile Safari/537.36",
+        "User-Agent": USER_AGENT,
         "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
         "Origin": BASE_URL,
         "Referer": f"{BASE_URL}/ai-video-generator",
         "x-requested-with": "mark.via.gp",
-        "sec-ch-ua": '"Not-A.Brand";v="99", "Android WebView";v="157", "Chromium";v="157"',
-        "sec-ch-ua-mobile": "?1",
-        "sec-ch-ua-platform": '"Android"',
-        "sec-fetch-site": "same-origin",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-dest": "empty"
     })
-
-    fake_clck = f"18e0{generate_random_string(4)}%5E2%5Egbc%5E0%5E2516"
-    fake_clsk = f"{generate_random_string(10)}%5E1795265175352%5E1%5E1%5Eu.clarity.ms%2Fcollect"
-    
-    session.cookies.set("_clck", fake_clck)
-    session.cookies.set("_clsk", fake_clsk)
-
-    session.post(
-        f"{BASE_URL}/api/video/anon/identity", 
-        json={}, 
-        timeout=15,
-        impersonate="chrome" 
-    )
-    
+    session.post(f"{BASE_URL}/api/video/anon/identity", json={}, timeout=10)
     return session
 
 @app.route('/')
@@ -70,12 +38,13 @@ def generate():
     if not prompt or not image_file:
         return jsonify({"status": "error", "message": "Prompt and image are required"})
 
+    # ⚠️ FIX: Read the file IMMEDIATELY before the generator stream starts
     image_bytes = image_file.read()
     content_type = image_file.content_type or "image/jpeg"
 
     def generate_stream():
         try:
-            yield "data: " + json.dumps({"log": "🔄 Generating new identity..."}) + "\n\n"
+            yield "data: " + json.dumps({"log": "🔄 Generating new identity (Bypassing limit)..."}) + "\n\n"
             session = get_fresh_session()
 
             # 1. Prepare Upload
@@ -94,7 +63,7 @@ def generate():
             }
 
             yield "data: " + json.dumps({"log": "☁️ Preparing upload..."}) + "\n\n"
-            r = session.post(f"{BASE_URL}/api/video/upload-input", json=payload, timeout=15, impersonate="chrome")
+            r = session.post(f"{BASE_URL}/api/video/upload-input", json=payload, timeout=15)
             data = r.json()
             yield "data: " + json.dumps({"log": f"Raw: {data}"}) + "\n\n"
 
@@ -104,7 +73,7 @@ def generate():
 
             # 2. Upload to R2
             yield "data: " + json.dumps({"log": "📤 Uploading image to R2..."}) + "\n\n"
-            r = session.put(data["uploadUrl"], data=image_bytes, headers=data["headers"], timeout=30, impersonate="chrome")
+            requests.put(data["uploadUrl"], data=image_bytes, headers=data["headers"], timeout=30)
 
             # 3. Confirm Upload
             yield "data: " + json.dumps({"log": "✅ Confirming upload..."}) + "\n\n"
@@ -117,7 +86,7 @@ def generate():
                 "action": "confirm",
                 "authorization": data["authorization"]
             }
-            r = session.post(f"{BASE_URL}/api/video/upload-input", json=confirm_payload, timeout=15, impersonate="chrome")
+            r = session.post(f"{BASE_URL}/api/video/upload-input", json=confirm_payload, timeout=15)
             img_data = r.json()
             yield "data: " + json.dumps({"log": f"Raw: {img_data}"}) + "\n\n"
 
@@ -136,7 +105,7 @@ def generate():
                 "media_sources": [{"mediaType": "image", "index": 0, "authorization": data["authorization"]}],
                 "client_request_id": client_req_id
             }
-            r = session.post(f"{BASE_URL}/api/video/anon/ticket", json=ticket_payload, timeout=15, impersonate="chrome")
+            r = session.post(f"{BASE_URL}/api/video/anon/ticket", json=ticket_payload, timeout=15)
             ticket_data = r.json()
             yield "data: " + json.dumps({"log": f"Raw: {ticket_data}"}) + "\n\n"
 
@@ -144,7 +113,7 @@ def generate():
             wait_sec = ticket_data.get("data", {}).get("wait_ms", 80000) / 1000
 
             if not ticket:
-                yield "data: " + json.dumps({"error": "Ticket failed. ANON_DAILY_LIMIT hit."}) + "\n\n"
+                yield "data: " + json.dumps({"error": "Ticket failed"}) + "\n\n"
                 return
 
             # 5. Wait
@@ -154,13 +123,12 @@ def generate():
 
             # 6. Redeem
             yield "data: " + json.dumps({"log": "🎫 Redeeming ticket..."}) + "\n\n"
-            r = session.post(f"{BASE_URL}/api/video/anon/redeem", json={"ticket": ticket}, timeout=15, impersonate="chrome")
-            
+            r = session.post(f"{BASE_URL}/api/video/anon/redeem", json={"ticket": ticket}, timeout=15)
             while r.status_code == 409:
                 wait_ms = r.json().get("data", {}).get("wait_ms", 15000)
                 yield "data: " + json.dumps({"log": f"⏳ Server busy. Waiting {int(wait_ms/1000)}s..."}) + "\n\n"
                 time.sleep(wait_ms / 1000)
-                r = session.post(f"{BASE_URL}/api/video/anon/redeem", json={"ticket": ticket}, timeout=15, impersonate="chrome")
+                r = session.post(f"{BASE_URL}/api/video/anon/redeem", json={"ticket": ticket}, timeout=15)
 
             redeem_data = r.json()
             yield "data: " + json.dumps({"log": f"Raw: {redeem_data}"}) + "\n\n"
@@ -174,7 +142,7 @@ def generate():
             yield "data: " + json.dumps({"log": f"🎬 Rendering video (Job: {job_id})..."}) + "\n\n"
             last_progress = -1
             while True:
-                r = session.get(f"{BASE_URL}/api/video/anon/job/{job_id}", timeout=15, impersonate="chrome")
+                r = session.get(f"{BASE_URL}/api/video/anon/job/{job_id}", timeout=15)
                 job_data = r.json().get("data", {})
                 status = job_data.get("status")
                 progress = job_data.get("progress", 0)

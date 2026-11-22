@@ -1,24 +1,12 @@
 #!/usr/bin/env python3
 """
 magic_bot.py: Telegram bot for magichour.ai's free image-to-video tool.
-
-Flow (from the HAR log):
-  1. POST /rpc/freeToolUpload/getResumableUploadUrl  -> signed GCS upload URL
-  2. PUT  <uploadUrl>                                -> image bytes
-  3. POST /api/free-tools/v5/any-to-video            -> queue IMAGE_TO_VIDEO job
-  4. GET  /api/free-tools/v5/any-to-video/{id}/status -> poll until SUCCESS
-  5. GET  <signed output url>                        -> mp4, sent to Telegram
-
-Setup in Termux:
-  pkg install python
-  pip install "python-telegram-bot==21.*" requests
-  python 140.py
+Optimized for Render.com (includes health-check web server).
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
-import getpass
 import html
 import io
 import json
@@ -31,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import requests
+from aiohttp import web
 from telegram import (
     Bot,
     InlineKeyboardButton,
@@ -54,8 +43,7 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/157.0.0.0 Mobile Safari/537.36"
 )
 FAILED_STATES = {"FAILED", "ERROR", "CANCELED", "CANCELLED"}
-TOKEN_FILE = Path(__file__).with_name("bot_token.txt")
-MAX_CHUNK = 3800  # Telegram caps messages at 4096 characters
+MAX_CHUNK = 3800
 
 log = logging.getLogger("magic_bot")
 
@@ -72,7 +60,6 @@ HELP_TEXT = (
     "Without a caption, your saved prompt or the default is used."
 )
 
-
 @dataclass(frozen=True)
 class Settings:
     token: str
@@ -86,39 +73,32 @@ class Settings:
     dry_run: bool
     raw_to_chat: bool
 
-
 # ---------------------------------------------------------------------------
-# Token handling
+# Render Health Check Server
 # ---------------------------------------------------------------------------
 
-def get_token(cli_token: str | None) -> str:
-    """Use --token, then the env var, then the saved file, else ask once and save it."""
-    if cli_token:
-        return cli_token.strip()
+async def handle_ping(request):
+    return web.Response(text="Bot is alive!")
 
-    env_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if env_token:
-        return env_token.strip()
-
-    if TOKEN_FILE.exists():
-        return TOKEN_FILE.read_text(encoding="utf-8").strip()
-
-    token = getpass.getpass("Paste your Telegram bot token (input hidden): ").strip()
-    if ":" not in token:
-        sys.exit("That does not look like a bot token. It should contain a colon.")
-
-    TOKEN_FILE.write_text(token + "\n", encoding="utf-8")
-    os.chmod(TOKEN_FILE, 0o600)
-    print(f"Saved token to {TOKEN_FILE}")
-    return token
-
+async def start_web_server():
+    """Starts a dummy web server on the port Render provides."""
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    
+    # Render assigns a PORT env variable. Default to 8080 if not found.
+    port = int(os.environ.get("PORT", 8080))
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    log.info(f"Health check server running on port {port}")
 
 # ---------------------------------------------------------------------------
 # Raw response output: queued, rate-limit safe
 # ---------------------------------------------------------------------------
 
 async def send_raw(bot: Bot, chat_id: int, label: str, obj) -> None:
-    """Send a raw response to the chat, split into chunks if it is long."""
     body = obj if isinstance(obj, str) else json.dumps(
         obj, indent=2, ensure_ascii=False, default=str
     )
@@ -131,15 +111,12 @@ async def send_raw(bot: Bot, chat_id: int, label: str, obj) -> None:
                 await bot.send_message(chat_id, text, parse_mode="HTML")
                 break
             except RetryAfter as exc:
-                # Telegram flood control: wait the requested time and retry.
                 await asyncio.sleep(float(exc.retry_after) + 1)
             except BadRequest as exc:
                 log.warning("could not send raw message: %s", exc)
                 break
 
-
 async def outbox_worker(app: Application) -> None:
-    """Drain raw messages one at a time so they never flood Telegram."""
     queue: asyncio.Queue = app.bot_data["outbox"]
     while True:
         chat_id, label, obj = await queue.get()
@@ -150,11 +127,11 @@ async def outbox_worker(app: Application) -> None:
         finally:
             queue.task_done()
 
-
 async def post_init(app: Application) -> None:
     app.bot_data["outbox"] = asyncio.Queue()
     app.create_task(outbox_worker(app))
-
+    # Start the Render web server alongside the bot
+    app.create_task(start_web_server())
 
 def _safe_json(r: requests.Response):
     try:
@@ -162,14 +139,11 @@ def _safe_json(r: requests.Response):
     except ValueError:
         return r.text[:2000]
 
-
 # ---------------------------------------------------------------------------
 # magichour.ai client
 # ---------------------------------------------------------------------------
 
 class MagicClient:
-    """Wrapper around the free-tool endpoints. Raw responses go to emit()."""
-
     def __init__(self, s: Settings):
         self.s = s
         self.http = requests.Session()
@@ -267,7 +241,6 @@ class MagicClient:
         r.raise_for_status()
         return r.content
 
-
 # ---------------------------------------------------------------------------
 # Telegram handlers
 # ---------------------------------------------------------------------------
@@ -275,16 +248,13 @@ class MagicClient:
 def settings_of(context: ContextTypes.DEFAULT_TYPE) -> Settings:
     return context.bot_data["settings"]
 
-
 def is_allowed(update: Update, s: Settings) -> bool:
     user = update.effective_user
     return bool(user and user.id in s.allowed)
 
-
 async def deny(update: Update) -> None:
     if update.effective_message:
         await update.effective_message.reply_text("Not authorized.")
-
 
 def menu_markup() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -295,12 +265,10 @@ def menu_markup() -> InlineKeyboardMarkup:
         ],
     ])
 
-
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update, settings_of(context)):
         return await deny(update)
     await update.message.reply_text(MENU_TEXT, reply_markup=menu_markup())
-
 
 async def cmd_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update, settings_of(context)):
@@ -312,7 +280,6 @@ async def cmd_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     else:
         context.user_data["awaiting_prompt"] = True
         await update.message.reply_text("Send the prompt text now.")
-
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
@@ -331,7 +298,6 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     elif q.data == "help":
         await q.message.reply_text(HELP_TEXT, reply_markup=menu_markup())
 
-
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not is_allowed(update, settings_of(context)):
         return await deny(update)
@@ -341,7 +307,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(f"Prompt saved: {text}")
     else:
         await update.message.reply_text(MENU_TEXT, reply_markup=menu_markup())
-
 
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     s = settings_of(context)
@@ -365,7 +330,6 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     finally:
         context.bot_data["running"] -= 1
 
-
 async def run_job(update: Update, context: ContextTypes.DEFAULT_TYPE,
                   data: bytes, prompt: str) -> None:
     s = settings_of(context)
@@ -380,13 +344,12 @@ async def run_job(update: Update, context: ContextTypes.DEFAULT_TYPE,
         try:
             await status_msg.edit_text(text)
         except BadRequest:
-            pass  # "message is not modified" and similar
+            pass
 
     if s.dry_run:
         await set_status(f"Dry run: would render with prompt: {prompt}")
         return
 
-    # Worker threads call these; they hand work to the event loop safely.
     def emit(label: str, obj) -> None:
         if s.raw_to_chat:
             loop.call_soon_threadsafe(outbox.put_nowait, (chat.id, label, obj))
@@ -419,7 +382,6 @@ async def run_job(update: Update, context: ContextTypes.DEFAULT_TYPE,
             client.wait_for_result, task_id, emit, progress
         )
 
-        # Send the URL as soon as the job succeeds, before downloading.
         await chat.send_message(f"Video ready. Link (expires in about an hour):\n{video_url}")
 
         await set_status("Downloading result...")
@@ -444,68 +406,41 @@ async def run_job(update: Update, context: ContextTypes.DEFAULT_TYPE,
             outbox.put_nowait((chat.id, "ERROR", {"task_id": task_id, "error": repr(exc)}))
         await set_status(f"Failed: {exc}")
 
-
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Telegram bot for magichour.ai free image-to-video.")
-    
-    # YOUR TOKEN AND USER ID ARE PRE-FILLED HERE
-    p.add_argument("--token", default="8890014279:AAGuKNVfg2WJ21DXCS_kBXgVlexjRxXUhL8",
-                   help="Telegram bot token")
-    p.add_argument("--allow", default="1827265590",
-                   help="Comma-separated Telegram user IDs allowed to use the bot (required)")
-                   
-    p.add_argument("--poll-interval", type=float, default=5.0,
-                   help="Seconds between status checks (default 5)")
-    p.add_argument("--max-wait", type=float, default=900.0,
-                   help="Give up on a job after this many seconds (default 900)")
-    p.add_argument("--http-timeout", type=float, default=30.0,
-                   help="Timeout per HTTP request in seconds (default 30)")
-    p.add_argument("--concurrency", type=int, default=1,
-                   help="Jobs allowed to run at once across all users (default 1)")
-    p.add_argument("--send-limit-mb", type=float, default=49.0,
-                   help="Largest video to upload to Telegram (default 49)")
-    p.add_argument("--default-prompt", default="Gentle camera motion",
-                   help="Prompt used when none is given")
-    p.add_argument("--no-raw", action="store_true",
-                   help="Do not send raw responses to Telegram")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Do not call magichour.ai; only test the Telegram side")
-    p.add_argument("--log-level", default="INFO",
-                   choices=["DEBUG", "INFO", "WARNING", "ERROR"])
-    return p.parse_args(argv)
-
-
-def main(argv: list[str] | None = None) -> None:
-    a = parse_args(argv)
+def main() -> None:
     logging.basicConfig(
-        level=a.log_level,
+        level=os.environ.get("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    token = get_token(a.token)
+    # YOUR TOKEN AND ID ARE HARDCODED HERE
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "8890014279:AAGuKNVfg2WJ21DXCS_kBXgVlexjRxXUhL8")
+    allow_str = os.environ.get("ALLOWED_USERS", "1827265590")
 
+    if not token:
+        sys.exit("Missing TELEGRAM_BOT_TOKEN environment variable.")
+    
     try:
-        allowed = frozenset(int(x) for x in a.allow.split(",") if x.strip())
+        allowed = frozenset(int(x) for x in allow_str.split(",") if x.strip())
     except ValueError:
-        sys.exit("--allow must be comma-separated numeric Telegram user IDs")
+        sys.exit("ALLOWED_USERS must be comma-separated numeric Telegram user IDs")
     if not allowed:
-        sys.exit("Refusing to start with no allowed users: pass --allow <your_user_id>")
+        sys.exit("Refusing to start with no allowed users: set ALLOWED_USERS environment variable.")
 
     s = Settings(
         token=token,
         allowed=allowed,
-        poll_interval=a.poll_interval,
-        max_wait=a.max_wait,
-        http_timeout=a.http_timeout,
-        concurrency=max(1, a.concurrency),
-        send_limit_mb=a.send_limit_mb,
-        default_prompt=a.default_prompt,
-        dry_run=a.dry_run,
-        raw_to_chat=not a.no_raw,
+        poll_interval=float(os.environ.get("POLL_INTERVAL", 5.0)),
+        max_wait=float(os.environ.get("MAX_WAIT", 900.0)),
+        http_timeout=float(os.environ.get("HTTP_TIMEOUT", 30.0)),
+        concurrency=int(os.environ.get("CONCURRENCY", 1)),
+        send_limit_mb=float(os.environ.get("SEND_LIMIT_MB", 49.0)),
+        default_prompt=os.environ.get("DEFAULT_PROMPT", "Gentle camera motion"),
+        dry_run=os.environ.get("DRY_RUN", "false").lower() == "true",
+        raw_to_chat=os.environ.get("NO_RAW", "false").lower() != "true",
     )
 
     app = (
@@ -525,7 +460,6 @@ def main(argv: list[str] | None = None) -> None:
 
     log.info("starting bot; allowed users=%s dry_run=%s", sorted(allowed), s.dry_run)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
-
 
 if __name__ == "__main__":
     main()

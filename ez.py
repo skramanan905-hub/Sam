@@ -3,30 +3,14 @@ import uuid
 import time
 import json
 import base64
-import os
-import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from curl_cffi import requests as curl_requests
 
+# ⚠️ PUT YOUR NEW BOT TOKEN HERE
 BOT_TOKEN = "8890014279:AAGuKNVfg2WJ21DXCS_kBXgVlexjRxXUhL8"
 BASE_URL = "https://magichour.ai"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 user_data = {}
-
-# --- RENDER PORT BINDING FIX ---
-def run_dummy_server():
-    port = int(os.environ.get("PORT", 8080))
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"Bot is running!")
-    server = HTTPServer(('0.0.0.0', port), Handler)
-    server.serve_forever()
-
-threading.Thread(target=run_dummy_server, daemon=True).start()
-# -------------------------------
 
 def get_fresh_session():
     session = curl_requests.Session()
@@ -46,6 +30,7 @@ def get_fresh_session():
         "sec-fetch-dest": "empty"
     })
 
+    # Fake Device ID to reset the limit
     fake_distinct_id = str(uuid.uuid4())
     fake_created_at = int(time.time() * 1000)
     fake_mh_did = base64.b64encode(json.dumps({
@@ -54,6 +39,7 @@ def get_fresh_session():
     }).encode()).decode()
     session.cookies.set("mh_did", fake_mh_did)
     
+    # Get CSRF token
     session.get(f"{BASE_URL}/api/auth/csrf", impersonate="chrome")
     return session
 
@@ -102,8 +88,11 @@ def process_generation(chat_id, image_bytes, prompt):
     
     try:
         session = get_fresh_session()
+        
+        # CRITICAL FIX: Generate ONE task_id and use it for EVERYTHING
         task_id = str(uuid.uuid4())
         
+        # --- STEP 1: Get Resumable Upload URL ---
         safe_edit(chat_id, msg.message_id, "☁️ Step 1: Requesting upload slot...")
         
         upload_req_payload = {
@@ -119,11 +108,8 @@ def process_generation(chat_id, image_bytes, prompt):
         
         r = session.post(f"{BASE_URL}/rpc/freeToolUpload/getResumableUploadUrl", json=upload_req_payload, impersonate="chrome")
         
-        raw_res1 = json.dumps(r.json(), indent=2)
-        safe_edit(chat_id, msg.message_id, f"☁️ Step 1 Response:\n```json\n{raw_res1[:800]}\n```", parse_mode="Markdown")
-        time.sleep(1)
-        
         if r.status_code != 200:
+            safe_edit(chat_id, msg.message_id, f"❌ Step 1 Failed: {r.text[:200]}")
             return
             
         upload_data = r.json().get("json", {})
@@ -131,13 +117,13 @@ def process_generation(chat_id, image_bytes, prompt):
         file_path = upload_data.get("filePath")
         
         if not upload_url or not file_path:
-            safe_edit(chat_id, msg.message_id, "❌ Bad upload response.")
+            safe_edit(chat_id, msg.message_id, "❌ No upload URL returned.")
             return
             
-        safe_edit(chat_id, msg.message_id, "📤 Step 2: Uploading image to Google Cloud...")
+        # --- STEP 2: Upload Image to GCS ---
+        safe_edit(chat_id, msg.message_id, "📤 Step 2: Uploading image...")
         
         file_size = len(image_bytes)
-        
         headers = {
             "Content-Type": "image/jpeg",
             "Content-Length": str(file_size),
@@ -147,35 +133,35 @@ def process_generation(chat_id, image_bytes, prompt):
         put_res = session.put(upload_url, data=image_bytes, headers=headers, impersonate="chrome")
         
         if put_res.status_code not in [200, 201]:
-            safe_edit(chat_id, msg.message_id, f"❌ Upload failed.\nStatus: {put_res.status_code}\n{put_res.text[:200]}")
+            safe_edit(chat_id, msg.message_id, f"❌ Upload failed.\nStatus: {put_res.status_code}")
             return
             
-        safe_edit(chat_id, msg.message_id, "🎟️ Step 3: Starting video generation...")
+        # --- STEP 3: Start the Video Generation Job ---
+        safe_edit(chat_id, msg.message_id, "🎟️ Step 3: Starting generation...")
         
         payload = {
             "prompt": prompt,
-            "image_file_path": file_path,
+            "image_file_path": file_path, 
             "aspect_ratio": "9:16",
             "model": "any-to-video-v5",
             "duration": 5,
-            "client_request_id": task_id
+            "client_request_id": task_id  # Same ID here
         }
         
         r = session.post(f"{BASE_URL}/api/free-tools/v5/any-to-video", json=payload, impersonate="chrome")
         
-        raw_res2 = json.dumps(r.json(), indent=2)
-        safe_edit(chat_id, msg.message_id, f"🎟️ Step 3 Response:\n```json\n{raw_res2[:800]}\n```", parse_mode="Markdown")
-        time.sleep(2)
-        
         if r.status_code == 429:
-            safe_edit(chat_id, msg.message_id, "❌ Limit Reached! Turn on Airplane mode for 5 seconds and try again.")
+            safe_edit(chat_id, msg.message_id, "❌ Limit Reached! Turn on Airplane mode.")
             return
         elif r.status_code != 200:
+            safe_edit(chat_id, msg.message_id, f"❌ Generation failed: {r.text[:200]}")
             return
             
+        # --- STEP 4: Poll for the Result ---
         start_time = time.time()
         
         while True:
+            # Same ID here too
             r = session.get(f"{BASE_URL}/api/free-tools/v5/any-to-video/{task_id}/status", impersonate="chrome")
             job_data = r.json()
             status = job_data.get("status")
@@ -188,14 +174,14 @@ def process_generation(chat_id, image_bytes, prompt):
             if status == "SUCCESS":
                 video_url = job_data["files"][0]["url"]
                 bot.delete_message(chat_id, msg.message_id)
-                bot.send_video(chat_id, video_url, caption=f"✅ Done in {timer_str}!\nPrompt: {prompt}\nRemaining: {job_data.get('remaining')}")
+                bot.send_video(chat_id, video_url, caption=f"✅ Done in {timer_str}!\nPrompt: {prompt}")
                 return
             elif status == "FAILED":
                 safe_edit(chat_id, msg.message_id, f"❌ Rendering failed after {timer_str}.")
                 return
                 
             raw_status = json.dumps(job_data, indent=2)
-            msg_text = f"⏳ Rendering... ({timer_str})\nQueue Pos: {position}\n```json\n{raw_status[:500]}\n```"
+            msg_text = f"⏳ Rendering... ({timer_str})\nQueue: {position}\n```json\n{raw_status[:400]}\n```"
             safe_edit(chat_id, msg.message_id, msg_text, parse_mode="Markdown")
                 
             time.sleep(4)

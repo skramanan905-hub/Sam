@@ -8,7 +8,7 @@ import threading
 import telebot
 from curl_cffi import requests as curl_requests
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]          # never hardcode this
+BOT_TOKEN = os.environ["8890014279:AAGuKNVfg2WJ21DXCS_kBXgVlexjRxXUhL8"]          # never hardcode this
 BASE_URL = "https://magichour.ai"
 POLL_INTERVAL = 4
 MAX_WAIT_SECONDS = 600

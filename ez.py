@@ -3,13 +3,13 @@ import time
 import json
 import uuid
 import base64
-import threading
 from curl_cffi import requests as curl_requests
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
+# Enable CORS for all routes and origins
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 BASE_URL = "https://magichour.ai"
 
@@ -45,15 +45,20 @@ def get_fresh_session():
 
 @app.route('/')
 def home():
+    # This allows Render to see the port is open and active
     return "Magic Hour Backend is Running!"
 
-@app.route('/api/generate', methods=['POST'])
+@app.route('/api/generate', methods=['POST', 'OPTIONS'])
 def generate():
+    # Handle CORS preflight
+    if request.method == 'OPTIONS':
+        return '', 200
+
     prompt = request.form.get('prompt', '')
     image_file = request.files.get('image')
 
     if not prompt or not image_file:
-        return jsonify({"status": "error", "message": "Prompt and image are required"})
+        return jsonify({"status": "error", "message": "Prompt and image are required"}), 400
 
     image_bytes = image_file.read()
     content_type = image_file.content_type or "image/jpeg"
@@ -62,9 +67,11 @@ def generate():
         try:
             yield "data: " + json.dumps({"log": "🔄 Creating new session..."}) + "\n\n"
             session = get_fresh_session()
+            
+            # Generate ONE task ID and use it everywhere
             task_id = str(uuid.uuid4())
             
-            # Step 1
+            # --- Step 1: Get Upload URL ---
             yield "data: " + json.dumps({"log": "☁️ Requesting upload slot..."}) + "\n\n"
             upload_req_payload = {
                 "json": {
@@ -77,6 +84,7 @@ def generate():
                 }
             }
             r = session.post(f"{BASE_URL}/rpc/freeToolUpload/getResumableUploadUrl", json=upload_req_payload, impersonate="chrome")
+            
             if r.status_code != 200:
                 yield "data: " + json.dumps({"error": f"Upload URL failed: {r.text[:100]}"}) + "\n\n"
                 return
@@ -85,7 +93,11 @@ def generate():
             upload_url = upload_data.get("uploadUrl")
             file_path = upload_data.get("filePath")
             
-            # Step 2
+            if not upload_url or not file_path:
+                yield "data: " + json.dumps({"error": "No upload URL returned from Magic Hour."}) + "\n\n"
+                return
+            
+            # --- Step 2: Upload Image ---
             yield "data: " + json.dumps({"log": "📤 Uploading image..."}) + "\n\n"
             file_size = len(image_bytes)
             headers = {
@@ -94,11 +106,12 @@ def generate():
                 "Content-Range": f"bytes 0-{file_size-1}/{file_size}"
             }
             put_res = session.put(upload_url, data=image_bytes, headers=headers, impersonate="chrome")
+            
             if put_res.status_code not in [200, 201]:
                 yield "data: " + json.dumps({"error": f"Upload failed: {put_res.status_code}"}) + "\n\n"
                 return
 
-            # Step 3
+            # --- Step 3: Start Generation ---
             yield "data: " + json.dumps({"log": "🎟️ Starting generation..."}) + "\n\n"
             payload = {
                 "prompt": prompt,
@@ -106,7 +119,7 @@ def generate():
                 "aspect_ratio": "9:16",
                 "model": "any-to-video-v5",
                 "duration": 5,
-                "client_request_id": task_id
+                "client_request_id": task_id # SAME TASK ID
             }
             r = session.post(f"{BASE_URL}/api/free-tools/v5/any-to-video", json=payload, impersonate="chrome")
             
@@ -117,9 +130,10 @@ def generate():
                 yield "data: " + json.dumps({"error": f"Generation failed: {r.text[:100]}"}) + "\n\n"
                 return
 
-            # Step 4
+            # --- Step 4: Poll for Result ---
             start_time = time.time()
             while True:
+                # SAME TASK ID
                 r = session.get(f"{BASE_URL}/api/free-tools/v5/any-to-video/{task_id}/status", impersonate="chrome")
                 job_data = r.json()
                 status = job_data.get("status")
@@ -146,4 +160,5 @@ def generate():
     return Response(generate_stream(), mimetype="text/event-stream")
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)

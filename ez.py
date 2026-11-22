@@ -3,10 +3,7 @@ import uuid
 import time
 import json
 import base64
-import os
-import threading
 from curl_cffi import requests as curl_requests
-from flask import Flask
 
 # ⚠️ PUT YOUR NEW BOT TOKEN HERE
 BOT_TOKEN = "8890014279:AAGuKNVfg2WJ21DXCS_kBXgVlexjRxXUhL8"
@@ -15,18 +12,6 @@ BASE_URL = "https://magichour.ai"
 bot = telebot.TeleBot(BOT_TOKEN)
 user_data = {}
 
-# --- FAKE WEB SERVER (To keep Render alive) ---
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Magic Hour Telegram Bot is running!"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-# --- BOT LOGIC ---
 def get_fresh_session():
     session = curl_requests.Session()
     session.headers.update({
@@ -140,15 +125,18 @@ def process_generation(chat_id, image_bytes, prompt):
         safe_edit(chat_id, msg.message_id, "📤 Step 2: Uploading image to Google Cloud...")
         
         file_size = len(image_bytes)
+        
+        # CRITICAL FIX: GCS Resumable Upload requires Content-Length and Content-Range
         headers = {
             "Content-Type": "image/jpeg",
+            "Content-Length": str(file_size),
             "Content-Range": f"bytes 0-{file_size-1}/{file_size}"
         }
         
         put_res = session.put(upload_url, data=image_bytes, headers=headers, impersonate="chrome")
         
         if put_res.status_code not in [200, 201]:
-            safe_edit(chat_id, msg.message_id, f"❌ Upload failed.\nStatus: {put_res.status_code}")
+            safe_edit(chat_id, msg.message_id, f"❌ Upload failed.\nStatus: {put_res.status_code}\n{put_res.text[:200]}")
             return
             
         # --- STEP 3: Start the Video Generation Job ---
@@ -170,7 +158,7 @@ def process_generation(chat_id, image_bytes, prompt):
         time.sleep(2)
         
         if r.status_code == 429:
-            safe_edit(chat_id, msg.message_id, "❌ Limit Reached! Render IP is blocked.")
+            safe_edit(chat_id, msg.message_id, "❌ Limit Reached! Turn on Airplane mode for 5 seconds and try again.")
             return
         elif r.status_code != 200:
             return
@@ -206,13 +194,5 @@ def process_generation(chat_id, image_bytes, prompt):
     except Exception as e:
         safe_edit(chat_id, msg.message_id, f"Error: {str(e)}")
 
-# --- START BOTH ---
-if __name__ == "__main__":
-    # 1. Start the fake web server in the background
-    t = threading.Thread(target=run_flask)
-    t.daemon = True
-    t.start()
-    
-    # 2. Start the Telegram bot
-    print("Bot is running on Render...")
-    bot.infinity_polling()
+print("Magic Hour Bot is running...")
+bot.infinity_polling()
